@@ -15,12 +15,12 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # Google AI - Modelos
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-PRIMARY_MODEL = "gemini-2.5-flash"
-FALLBACK_MODEL = "gemini-2.0-flash"
+PRIMARY_MODEL = "gemini-2.5-flash"          # Modelo principal (estable, function calling)
+FALLBACK_MODEL = "gemini-2.5-flash-lite"    # Fallback económico (estable, function calling)
 
 # Configuración de reintentos
 MAX_RETRIES = 3
-RETRY_DELAY = 1  # segundos (se multiplica con backoff exponencial)
+RETRY_DELAY = 2  # segundos base (se multiplica con backoff exponencial)
 
 # Rutas de memoria
 MEMORY_FILE = "memory/MEMORY.md"
