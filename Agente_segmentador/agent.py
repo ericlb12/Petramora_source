@@ -18,7 +18,6 @@ from config import (
     FALLBACK_MODEL,
     MAX_RETRIES,
     RETRY_DELAY,
-    MEMORY_FILE,
     get_supabase
 )
 from prompts import SYSTEM_PROMPT
@@ -26,7 +25,6 @@ from tools import (
     get_segment_distribution,
     get_segment_evolution,
     get_segment_metrics,
-    save_to_memory
 )
 
 # ─────────────────────────────────────────────
@@ -41,7 +39,6 @@ TOOLS_MAP = {
     "get_segment_distribution": get_segment_distribution,
     "get_segment_evolution": get_segment_evolution,
     "get_segment_metrics": get_segment_metrics,
-    "save_to_memory": save_to_memory
 }
 
 # ─────────────────────────────────────────────
@@ -83,7 +80,7 @@ tool_declarations = types.Tool(
             name="get_segment_evolution",
             description=(
                 "Obtiene la evolución temporal de un segmento o de todos los segmentos. "
-                "Usa para preguntas como '¿cómo han evolucionado los clientes En riesgo?' "
+                "Usa para preguntas como '¿cómo han evolucionado los Champions dormido?' "
                 "o '¿tendencia de los últimos meses?'"
             ),
             parameters_json_schema={
@@ -92,8 +89,10 @@ tool_declarations = types.Tool(
                     "segmento": {
                         "type": "string",
                         "description": (
-                            "Nombre del segmento RFM (ej: 'Champion', 'En riesgo', 'Leal'). "
-                            "Si no se especifica, retorna todos los segmentos."
+                            "Nombre exacto del segmento RFM: 'Champion', 'Champions casi recurrente', "
+                            "'Champions dormido', 'Rico potencial', 'Oportunista nuevo', "
+                            "'Oportunista con potencial', 'Oportunista perdido', 'Rico perdido', "
+                            "'Activo Básico', '0'. Si no se especifica, retorna todos."
                         )
                     },
                     "meses": {
@@ -125,61 +124,16 @@ tool_declarations = types.Tool(
                     "segmento": {
                         "type": "string",
                         "description": (
-                            "Filtrar por segmento específico (ej: 'Champion', 'En riesgo'). "
-                            "Si no se especifica, retorna todos los segmentos."
+                            "Filtrar por segmento específico (ej: 'Champion', 'Rico perdido', "
+                            "'Oportunista nuevo'). Si no se especifica, retorna todos."
                         )
                     }
                 },
                 "required": []
             }
         ),
-        types.FunctionDeclaration(
-            name="save_to_memory",
-            description=(
-                "Guarda información importante en la memoria de largo plazo del agente. "
-                "Usa cuando descubras insights importantes, preferencias del usuario, "
-                "o decisiones de negocio que deban recordarse en futuras conversaciones."
-            ),
-            parameters_json_schema={
-                "type": "object",
-                "properties": {
-                    "categoria": {
-                        "type": "string",
-                        "description": (
-                            "Categoría: 'preferencias', 'insights', 'decisiones', 'notas'"
-                        ),
-                        "enum": ["preferencias", "insights", "decisiones", "notas"]
-                    },
-                    "contenido": {
-                        "type": "string",
-                        "description": "Texto conciso y accionable a guardar"
-                    }
-                },
-                "required": ["categoria", "contenido"]
-            }
-        ),
     ]
 )
-
-
-# ─────────────────────────────────────────────
-# Funciones de memoria
-# ─────────────────────────────────────────────
-
-def load_memory() -> str:
-    """Carga el archivo de memoria curada si existe"""
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            return f.read()
-    return ""
-
-
-def get_system_prompt_with_memory() -> str:
-    """Combina el system prompt con la memoria curada"""
-    memory = load_memory()
-    if memory:
-        return f"{SYSTEM_PROMPT}\n\n## Memoria del contexto anterior\n{memory}"
-    return SYSTEM_PROMPT
 
 
 # ─────────────────────────────────────────────
@@ -370,7 +324,7 @@ def chat(user_message: str, session_id: str = None, history: list = None) -> str
     # - tools: declaraciones explícitas (no funciones Python)
     # - automatic_function_calling: DESACTIVADO (lo manejamos nosotros)
     agent_config = types.GenerateContentConfig(
-        system_instruction=get_system_prompt_with_memory(),
+        system_instruction=SYSTEM_PROMPT,
         tools=[tool_declarations],
         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         temperature=0.3,
@@ -508,8 +462,7 @@ def main():
     print("AGENTE SEGMENTADOR - PETRAMORA")
     print("=" * 50)
     print("Escribe 'salir' para terminar")
-    print("Escribe 'nueva' para iniciar nueva sesión")
-    print("Escribe 'memoria' para ver la memoria actual\n")
+    print("Escribe 'nueva' para iniciar nueva sesión\n")
     
     session_id = str(uuid.uuid4())
     history = []
@@ -527,15 +480,6 @@ def main():
             session_id = str(uuid.uuid4())
             history = []
             print(f"\n[Nueva sesion: {session_id[:8]}...]\n")
-            continue
-        
-        if user_input.lower() == 'memoria':
-            memory = load_memory()
-            print("\n" + "=" * 50)
-            print("MEMORIA ACTUAL:")
-            print("=" * 50)
-            print(memory if memory else "(vacía)")
-            print("=" * 50 + "\n")
             continue
         
         if not user_input:

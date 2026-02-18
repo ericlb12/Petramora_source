@@ -4,6 +4,8 @@
 > Editar manualmente o dejar que el agente lo actualice con insights importantes.
 
 ## Preferencias del usuario
+- [2026-02-17] TEST: Usuario prefiere ver datos en porcentajes
+- [2026-02-16] TEST: Usuario prefiere ver datos en porcentajes
 - [2026-02-13] TEST: Usuario prefiere ver datos en porcentajes
 - [2026-02-13] TEST: Usuario prefiere ver datos en porcentajes
 - [2026-02-13] TEST: Usuario prefiere ver datos en porcentajes
@@ -12,6 +14,10 @@
 - (Agregar preferencias detectadas durante las conversaciones)
 
 ## Insights importantes
+- [2026-02-17] El segmento Champion, aunque pequeño en número (0.3% de clientes), genera el 42.8% del gasto total. Es el principal motor de ingresos.
+- [2026-02-17] TEST: Champions son 8% de clientes pero 45% del gasto
+- [2026-02-16] Champions son 0.3% de clientes pero 42.8% del gasto total.
+- [2026-02-16] TEST: Champions son 8% de clientes pero 45% del gasto
 - [2026-02-13] TEST: Champions son 8% de clientes pero 45% del gasto
 - [2026-02-13] TEST: Champions son 8% de clientes pero 45% del gasto
 - [2026-02-13] TEST: Champions son 8% de clientes pero 45% del gasto

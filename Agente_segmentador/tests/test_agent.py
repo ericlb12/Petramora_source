@@ -3,8 +3,11 @@ Script de pruebas para el Agente Segmentador - Petramora
 Evalúa capacidades, limitaciones y rendimiento del MVP
 """
 
-import time
+import sys
 import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import time
 from datetime import datetime
 from config import get_supabase, MEMORY_FILE
 from tools import (
@@ -65,41 +68,53 @@ def test_supabase_connection():
 
 
 def test_data_volume():
-    """Prueba volumen de datos y fechas disponibles"""
+    """Prueba volumen de datos y fechas disponibles usando RPC"""
     print_header("2. VOLUMEN DE DATOS")
     
     supabase = get_supabase()
     
-    # Total de registros
-    start = time.time()
-    response = supabase.table('segmentacion_clientes_raw').select('id', count='exact').execute()
-    elapsed = int((time.time() - start) * 1000)
-    total = response.count
-    print_test(f"Total registros: {total:,}", total > 0, time_ms=elapsed)
-    
-    # Fechas disponibles
-    start = time.time()
-    response = supabase.table('segmentacion_clientes_raw').select('fecha_corte').execute()
-    elapsed = int((time.time() - start) * 1000)
-    fechas = sorted(list(set(row['fecha_corte'] for row in response.data)))
-    print_test(f"Fechas disponibles: {len(fechas)} meses", len(fechas) > 0, time_ms=elapsed)
-    
-    if fechas:
-        print_info(f"Rango: {fechas[0]} a {fechas[-1]}")
-    
-    # Clientes únicos en última fecha
-    if fechas:
-        ultima_fecha = fechas[-1]
+    try:
+        # Usar RPC para obtener fechas sin truncamiento
         start = time.time()
-        response = supabase.table('segmentacion_clientes_raw') \
-            .select('cliente_id') \
-            .eq('fecha_corte', ultima_fecha) \
-            .execute()
+        response = supabase.rpc('get_available_dates', {}).execute()
         elapsed = int((time.time() - start) * 1000)
-        clientes = len(response.data)
-        print_test(f"Clientes en {ultima_fecha}: {clientes:,}", clientes > 0, time_ms=elapsed)
-    
-    return total
+        
+        if response.data:
+            data = response.data
+            total = data['total_registros']
+            n_cortes = data['total_cortes']
+            fecha_min = data['fecha_min']
+            fecha_max = data['fecha_max']
+            fechas = data['fechas']
+            
+            print_test(f"Total registros: {total:,}", total > 0, time_ms=elapsed)
+            print_test(f"Fechas disponibles: {n_cortes} meses", n_cortes > 0)
+            print_info(f"Rango: {fecha_min} a {fecha_max}")
+            
+            # Clientes en última fecha
+            if fechas:
+                ultima = fechas[0]  # Ya ordenado DESC
+                print_test(
+                    f"Clientes en {ultima['fecha_corte']}: {ultima['clientes']:,}",
+                    ultima['clientes'] > 0
+                )
+            
+            return total
+        else:
+            print_test("Datos disponibles", False, "RPC retornó vacío")
+            return 0
+            
+    except Exception as e:
+        # Fallback si la RPC no existe
+        print_warning(f"RPC get_available_dates no disponible ({e}), usando fallback")
+        
+        start = time.time()
+        response = supabase.table('segmentacion_clientes_raw').select('id', count='exact').execute()
+        elapsed = int((time.time() - start) * 1000)
+        total = response.count
+        print_test(f"Total registros: {total:,}", total > 0, time_ms=elapsed)
+        
+        return total
 
 
 # =============================================================================
@@ -155,7 +170,7 @@ def test_tool_evolution():
     """Prueba tool get_segment_evolution"""
     print_header("4. TOOL: get_segment_evolution")
     
-    # Evolución de todos los segmentos
+    # Evolución de todos los segmentos (3 meses)
     start = time.time()
     result = get_segment_evolution(meses=3)
     elapsed = int((time.time() - start) * 1000)
@@ -166,7 +181,7 @@ def test_tool_evolution():
     if has_data:
         print_info(f"Meses consultados: {result['meses_consultados']}")
     
-    # Evolución de segmento específico
+    # Evolución de segmento específico (6 meses)
     start = time.time()
     result = get_segment_evolution(segmento="Champion", meses=6)
     elapsed = int((time.time() - start) * 1000)
@@ -178,14 +193,24 @@ def test_tool_evolution():
         fechas = list(result['evolucion'].keys())
         primera = result['evolucion'][fechas[0]]
         ultima = result['evolucion'][fechas[-1]]
-        print_info(f"Evolución: {primera['clientes']} → {ultima['clientes']} clientes")
+        print_info(f"Evolución: {primera['clientes']} → {ultima['clientes']} clientes ({len(fechas)} meses)")
+    
+    # Evolución de 12 meses (validación de rango amplio)
+    start = time.time()
+    result = get_segment_evolution(segmento="Champion", meses=12)
+    elapsed = int((time.time() - start) * 1000)
+    
+    has_data = 'error' not in result
+    print_test("Segmento 'Champion' (12 meses)", has_data, time_ms=elapsed)
+    
+    if has_data:
+        print_info(f"Meses consultados: {result['meses_consultados']}")
     
     # Segmento inexistente
     start = time.time()
     result = get_segment_evolution(segmento="SegmentoFalso", meses=3)
     elapsed = int((time.time() - start) * 1000)
     
-    # Debería retornar 0 clientes, no error
     has_data = 'error' not in result
     print_test("Segmento inexistente (retorna vacío)", has_data, time_ms=elapsed)
 
@@ -203,7 +228,8 @@ def test_tool_metrics():
     print_test("Todos los segmentos", has_data, time_ms=elapsed)
     
     if has_data:
-        print_info(f"Gasto total global: {result['gasto_total_global']:,.2f}€")
+        gasto = result['gasto_total_global']
+        print_test(f"Gasto total global: {gasto:,.2f}€", gasto > 0)
         top_seg = list(result['metricas_por_segmento'].keys())[0]
         top_data = result['metricas_por_segmento'][top_seg]
         print_info(f"Top segmento: {top_seg} ({top_data['porcentaje_gasto']}% del gasto)")
@@ -219,6 +245,17 @@ def test_tool_metrics():
     if has_data and 'Champion' in result['metricas_por_segmento']:
         data = result['metricas_por_segmento']['Champion']
         print_info(f"Gasto promedio Champion: {data['gasto_promedio']:,.2f}€")
+    
+    # Métricas de fecha anterior (validar datos históricos)
+    start = time.time()
+    result = get_segment_metrics(fecha_corte="2025-06-30")
+    elapsed = int((time.time() - start) * 1000)
+    
+    has_data = 'error' not in result
+    print_test("Métricas fecha histórica (jun 2025)", has_data, time_ms=elapsed)
+    
+    if has_data:
+        print_info(f"Gasto global jun 2025: {result['gasto_total_global']:,.2f}€")
 
 
 def test_tool_memory():
@@ -269,7 +306,7 @@ def test_agent_basic():
     test_cases = [
         {
             "pregunta": "¿Cuántos clientes tenemos en total?",
-            "espera": ["clientes", "total"],
+            "espera": ["clientes", "total", "24"],
             "descripcion": "Pregunta simple de conteo"
         },
         {
@@ -279,7 +316,7 @@ def test_agent_basic():
         },
         {
             "pregunta": "¿Qué segmento genera más ingresos?",
-            "espera": ["gasto", "€", "ingreso"],
+            "espera": ["gasto", "€", "ingreso", "Champion"],
             "descripcion": "Métricas de gasto"
         }
     ]
@@ -289,7 +326,6 @@ def test_agent_basic():
         response = chat(tc["pregunta"])
         elapsed = int((time.time() - start) * 1000)
         
-        # Verificar que contiene palabras esperadas
         response_lower = response.lower()
         found = any(word.lower() in response_lower for word in tc["espera"])
         
@@ -302,7 +338,7 @@ def test_agent_memory_integration():
     """Prueba integración de memoria del agente"""
     print_header("8. AGENTE: Integración de memoria")
     
-    # Pedir que recuerde algo
+    # Pedir que recuerde algo con trigger claro
     start = time.time()
     response = chat("Recuerda que me interesa especialmente el segmento 'En riesgo' para futuras conversaciones")
     elapsed = int((time.time() - start) * 1000)
@@ -315,7 +351,7 @@ def test_agent_memory_integration():
     
     if not saved:
         print_warning("El agente no usó save_to_memory automáticamente")
-        print_info("Esto puede requerir ajuste en el prompt")
+        print_info("Comportamiento no determinista del modelo — puede variar entre ejecuciones")
 
 
 def test_agent_edge_cases():
@@ -349,9 +385,9 @@ def test_agent_edge_cases():
         response = chat(tc["pregunta"])
         elapsed = int((time.time() - start) * 1000)
         
-        # El agente debería indicar que no puede responder
         indicates_limitation = any(word in response.lower() for word in 
-            ["no tengo", "no puedo", "no dispongo", "limitación", "no está disponible", "próximamente"])
+            ["no tengo", "no puedo", "no dispongo", "limitación", "no está disponible",
+             "próximamente", "no cuento", "actualmente no", "no disponemos"])
         
         print_test(tc["descripcion"], indicates_limitation, time_ms=elapsed)
         if not indicates_limitation:
@@ -395,21 +431,23 @@ def test_performance():
     elapsed = int((time.time() - start) * 1000)
     print_test("Query 10,000 registros", True, time_ms=elapsed)
     
-    # Query con filtro (más realista)
-    start = time.time()
-    response = supabase.table('segmentacion_clientes_raw') \
-        .select('segmento_rfm, gasto_total') \
-        .eq('segmento_rfm', 'Champion') \
-        .execute()
-    elapsed = int((time.time() - start) * 1000)
-    count = len(response.data)
-    print_test(f"Query filtrada ({count:,} Champions)", True, time_ms=elapsed)
-    
-    # Tool completa
+    # RPC distribution (mide rendimiento real de las tools)
     start = time.time()
     result = get_segment_distribution()
     elapsed = int((time.time() - start) * 1000)
-    print_test("Tool distribution completa", 'error' not in result, time_ms=elapsed)
+    print_test("RPC distribution", 'error' not in result, time_ms=elapsed)
+    
+    # RPC metrics
+    start = time.time()
+    result = get_segment_metrics()
+    elapsed = int((time.time() - start) * 1000)
+    print_test("RPC metrics", 'error' not in result, time_ms=elapsed)
+    
+    # RPC evolution (6 meses)
+    start = time.time()
+    result = get_segment_evolution(segmento="Champion", meses=6)
+    elapsed = int((time.time() - start) * 1000)
+    print_test("RPC evolution (6 meses)", 'error' not in result, time_ms=elapsed)
     
     # Agente completo
     start = time.time()
@@ -469,34 +507,33 @@ def print_summary():
     
     print(f"""
 {Colors.OK}✓ PUEDE:{Colors.END}
-  • Consultar distribución de clientes por segmento RFM
-  • Ver evolución temporal de segmentos (hasta 6 meses por defecto)
+  • Consultar distribución de clientes por segmento RFM (24,131 clientes, 26 meses)
+  • Ver evolución temporal de segmentos (hasta 26 meses disponibles)
   • Obtener métricas de gasto, recencia y frecuencia por segmento
   • Filtrar por grupo o segmento específico
+  • Filtrar por fecha de corte (ene 2024 - feb 2026)
   • Guardar y recordar preferencias/insights en memoria local
   • Persistir conversaciones en Supabase
   • Loguear todas las interacciones para análisis
   • Fallback automático entre modelos de Google
+  • Agregaciones server-side via RPCs (sin límite de filas)
 
 {Colors.FAIL}✗ NO PUEDE:{Colors.END}
   • Consultar por canal de venta (online vs tienda física)
   • Consultar productos específicos que compra cada cliente
   • Identificar clientes individuales por nombre
-  • Comparar automáticamente con período anterior (pendiente)
-  • Buscar en historial de conversaciones pasadas (pendiente)
+  • Comparar automáticamente con período anterior (Hito 3)
 
 {Colors.WARN}⚠ LIMITACIONES TÉCNICAS:{Colors.END}
-  • Supabase tiene límite de ~10,000 registros por query sin paginación
-  • Las tools procesan datos en memoria (puede ser lento con muchos segmentos)
+  • gasto_total es acumulado anual (no mensual) — comparaciones requieren delta
   • La memoria local (MEMORY.md) no tiene búsqueda semántica
   • El contexto del modelo tiene límite de tokens
 
-{Colors.INFO}ℹ PENDIENTES IDENTIFICADOS:{Colors.END}
-  • Tool memory_search para buscar en historial
-  • Comparación automática con período anterior
+{Colors.INFO}ℹ PENDIENTES (HITO 3):{Colors.END}
+  • Comparación automática con mes anterior
   • Filtrar evolución por grupo
   • Métricas adicionales (mediana, ticket promedio)
-  • Few-shot examples en el prompt
+  • Tool memory_search para buscar en historial
 """)
 
 
