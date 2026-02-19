@@ -11,6 +11,8 @@
 - [2026-02-13] TEST: Usuario prefiere ver datos en porcentajes
 - [2026-02-13] TEST: Usuario prefiere ver datos en porcentajes
 - [2026-02-13] TEST: Usuario prefiere ver datos en porcentajes
+- [2026-02-18] Usuario le gusta el helado de crema de maní 🍦🥜
+- [2026-02-18] Peluche favorito: la vaquita 🐄🧸
 - (Agregar preferencias detectadas durante las conversaciones)
 
 ## Insights importantes
