@@ -25,6 +25,7 @@ from tools import (
     get_segment_distribution,
     get_segment_evolution,
     get_segment_metrics,
+    get_actionable_customers
 )
 
 # ─────────────────────────────────────────────
@@ -39,6 +40,7 @@ TOOLS_MAP = {
     "get_segment_distribution": get_segment_distribution,
     "get_segment_evolution": get_segment_evolution,
     "get_segment_metrics": get_segment_metrics,
+    "get_actionable_customers": get_actionable_customers,
 }
 
 # ─────────────────────────────────────────────
@@ -130,6 +132,33 @@ tool_declarations = types.Tool(
                     }
                 },
                 "required": []
+            }
+        ),
+        types.FunctionDeclaration(
+            name="get_actionable_customers",
+            description=(
+                "PRIORIDAD PARA EL DUEÑO. Obtiene una lista de clientes específicos (nombres reales) "
+                "que requieren atención inmediata hoy basado en criterios de negocio."
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "criterio": {
+                        "type": "string",
+                        "description": (
+                            "Criterio de selección: "
+                            "'churn_risk' (Champions en riesgo), "
+                            "'growth_potential' (Baja frecuencia/Gasto alto), "
+                            "'inactive_vip' (VIPs inactivos), "
+                            "'new_high_value' (Clientes nuevos top)."
+                        )
+                    },
+                    "limite": {
+                        "type": "integer",
+                        "description": "Número máximo de clientes a retornar (default: 10)"
+                    }
+                },
+                "required": ["criterio"]
             }
         ),
     ]
