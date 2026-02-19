@@ -73,41 +73,94 @@ def calculate_segments(row):
     f = row['num_facturas']
     m = row['gasto_total']
     
-    # 1. Segmento Recencia
-    if r < 30: seg_r = "RECURRENTE"
-    elif r < 90: seg_r = "ACTIVOS"
-    elif r < 180: seg_r = "REGULARES"
-    elif r < 365: seg_r = "DORMIDOS"
-    else: seg_r = "INACTIVOS"
+    # 1. Definir Scores (1-5) y Etiquetas Base
+    # Recencia
+    if r < 30: 
+        seg_r, score_r = "RECURRENTE", 5
+    elif r < 90: 
+        seg_r, score_r = "ACTIVOS", 4
+    elif r < 180: 
+        seg_r, score_r = "REGULARES", 3
+    elif r < 365: 
+        seg_r, score_r = "DORMIDOS", 2
+    else: 
+        seg_r, score_r = "INACTIVOS", 1
     
-    # 2. Segmento Frecuencia
-    if f >= 20: seg_f = "SUPERLEALES"
-    elif f >= 10: seg_f = "LEALES"
-    elif f >= 4: seg_f = "BUENOS"
-    elif f >= 2: seg_f = "REGULARES"
-    else: seg_f = "1 COMPRA"
+    # Frecuencia
+    if f >= 20: 
+        seg_f, score_f = "SUPERLEALES", 5
+    elif f >= 10: 
+        seg_f, score_f = "LEALES", 4
+    elif f >= 4: 
+        seg_f, score_f = "BUENOS", 3
+    elif f >= 2: 
+        seg_f, score_f = "REGULARES", 2
+    else: 
+        seg_f, score_f = "1 COMPRA", 1
     
-    # 3. Segmento Monetario
-    if m > 277: seg_m = "ORO"
-    elif m >= 138: seg_m = "PLATA"
-    elif m >= 68: seg_m = "BRONCE 1"
-    elif m >= 41: seg_m = "BRONCE 2"
-    else: seg_m = "BRONCE 3"
+    # Monetario
+    if m > 277: 
+        seg_m, score_m = "ORO", 5
+    elif m >= 138: 
+        seg_m, score_m = "PLATA", 4
+    elif m >= 68: 
+        seg_m, score_m = "BRONCE 1", 3
+    elif m >= 41: 
+        seg_m, score_m = "BRONCE 2", 2
+    else: 
+        seg_m, score_m = "BRONCE 3", 1
     
-    # 4. Segmento RFM y Grupo (Lógica simplificada para el Agente)
-    # Se puede expandir según necesitemos mapear nombres exactos de Champion, etc.
-    # Por ahora mantenemos los segmentos base para coherencia.
-    segmento = f"{seg_r} {seg_f} {seg_m}"
+    # 2. Score RFM Numérico (ej: 545)
+    score_total = (score_r * 100) + (score_f * 10) + score_m
     
-    # Mapeo a grupos generales
-    if seg_m == "ORO" or (seg_f in ["SUPERLEALES", "LEALES"] and seg_r == "RECURRENTE"):
+    # 3. Clasificación Final - Segmento RFM (Lógica de Negocio Petramora)
+    # Se aplica en cascada (el primero que cumple se queda con el cliente)
+    
+    # 1. Champion
+    if score_r >= 4 and score_f >= 4 and score_m >= 4:
+        segmento = "Champion"
+    
+    # 2. Champions casi recurrente
+    elif score_r >= 4 and score_m >= 4 and (2 <= score_f <= 3 or score_m == 4):
+        segmento = "Champions casi recurrente"
+        
+    # 3. Champions dormido
+    elif 2 <= score_r <= 3 and score_f >= 3 and score_m >= 4:
+        segmento = "Champions dormido"
+        
+    # 4. Rico perdido
+    elif score_r <= 2 and score_m >= 4:
+        segmento = "Rico perdido"
+        
+    # 5. Rico potencial
+    elif score_r >= 3 and score_f == 1 and score_m >= 4:
+        segmento = "Rico potencial"
+        
+    # 6. Activo Básico
+    elif score_r >= 4 and score_f >= 2 and score_m <= 3:
+        segmento = "Activo Básico"
+        
+    # 7. Oportunista con potencial
+    elif score_r == 3 and score_f >= 2 and score_m <= 4:
+        segmento = "Oportunista con potencial"
+        
+    # 8. Oportunista nuevo
+    elif score_r >= 3 and score_f == 1 and score_m <= 3:
+        segmento = "Oportunista nuevo"
+        
+    # 9. Oportunista perdido (Fallback para cubrir todos los casos, ej: R <= 2, M <= 3)
+    else:
+        segmento = "Oportunista perdido"
+    
+    # 4. Grupo General (grupo_segmento) - Visión de Negocio Macro
+    if "Champion" in segmento or (score_m == 5 and score_r >= 3):
         grupo = "1. Champions"
-    elif seg_m == "PLATA":
+    elif "Rico" in segmento or score_m == 4:
         grupo = "2. Ricos"
     else:
         grupo = "3. Oportunistas"
         
-    return pd.Series([seg_r, seg_f, seg_m, segmento, grupo])
+    return pd.Series([seg_r, seg_f, seg_m, score_total, segmento, grupo])
 
 def transform(df: pd.DataFrame) -> pd.DataFrame:
     """Transforma y filtra las columnas necesarias"""
@@ -138,13 +191,10 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
     
     # 5. Calcular Segmentos RFM en Python
     print("   Calculando nuevas reglas de segmentación...")
-    df_filtered[['seg_recencia', 'seg_frecuencia', 'seg_monetario', 'segmento_rfm', 'grupo_segmento']] = \
+    df_filtered[['seg_recencia', 'seg_frecuencia', 'seg_monetario', 'score_rfm', 'segmento_rfm', 'grupo_segmento']] = \
         df_filtered.apply(calculate_segments, axis=1)
     
-    # 6. Score RFM (opcional, como string)
-    df_filtered['score_rfm'] = 0 # Opcional: implementar score 111-555 si se requiere
-    
-    # 7. Eliminar duplicados
+    # 6. Eliminar duplicados
     df_filtered = df_filtered.drop_duplicates(subset=['cliente_id', 'fecha_corte'])
     
     print(f"\nRegistros listos para cargar: {len(df_filtered):,}")
