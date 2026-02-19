@@ -116,39 +116,39 @@ def calculate_segments(row):
     # 3. Clasificación Final - Segmento RFM (Lógica de Negocio Petramora)
     # Se aplica en cascada (el primero que cumple se queda con el cliente)
     
-    # 1. Champion
+    # 1. Champion (Lo mejor: Reciente, Fiel y con Gasto)
     if score_r >= 4 and score_f >= 4 and score_m >= 4:
         segmento = "Champion"
     
-    # 2. Champions casi recurrente
-    elif score_r >= 4 and score_m >= 4 and (2 <= score_f <= 3 or score_m == 4):
-        segmento = "Champions casi recurrente"
-        
-    # 3. Champions dormido
-    elif 2 <= score_r <= 3 and score_f >= 3 and score_m >= 4:
-        segmento = "Champions dormido"
-        
-    # 4. Rico perdido
-    elif score_r <= 2 and score_m >= 4:
-        segmento = "Rico perdido"
-        
-    # 5. Rico potencial
+    # 2. Rico potencial (Gasto alto pero primera compra o poca lealtad aún)
     elif score_r >= 3 and score_f == 1 and score_m >= 4:
         segmento = "Rico potencial"
         
-    # 6. Activo Básico
-    elif score_r >= 4 and score_f >= 2 and score_m <= 3:
-        segmento = "Activo Básico"
+    # 3. Champions casi recurrente (VIPs recientes pero con lealtad media)
+    elif score_r >= 4 and score_m >= 4:
+        segmento = "Champions casi recurrente"
         
-    # 7. Oportunista con potencial
-    elif score_r == 3 and score_f >= 2 and score_m <= 4:
-        segmento = "Oportunista con potencial"
+    # 4. Champions dormido (Eran top, ahora menos recientes)
+    elif 2 <= score_r <= 3 and score_f >= 4 and score_m >= 4:
+        segmento = "Champions dormido"
         
-    # 8. Oportunista nuevo
+    # 5. Rico perdido (Alto valor histórico, ahora inactivo)
+    elif score_r <= 2 and score_m >= 4:
+        segmento = "Rico perdido"
+        
+    # 6. Oportunista nuevo (Primera compra reciente, ticket bajo)
     elif score_r >= 3 and score_f == 1 and score_m <= 3:
         segmento = "Oportunista nuevo"
         
-    # 9. Oportunista perdido (Fallback para cubrir todos los casos, ej: R <= 2, M <= 3)
+    # 7. Activo Básico (Activos, ticket bajo/medio, repiten)
+    elif score_r >= 4 and score_m <= 3:
+        segmento = "Activo Básico"
+        
+    # 8. Oportunista con potencial (Moderadamente recientes, ticket medio, repiten)
+    elif score_r == 3:
+        segmento = "Oportunista con potencial"
+        
+    # 9. Oportunista perdido (Bajo valor, inactivos)
     else:
         segmento = "Oportunista perdido"
     

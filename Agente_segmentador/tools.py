@@ -128,6 +128,51 @@ def get_segment_metrics(fecha_corte: str = None, segmento: str = None) -> dict:
         return _get_segment_metrics_fallback(fecha_corte, segmento)
 
 
+def get_actionable_customers(criterio: str = "churn_risk", limite: int = 10) -> dict:
+    """
+    Obtiene una lista de clientes específicos que requieren atención inmediata.
+    
+    Args:
+        criterio: 
+            - "churn_risk": Champions que están aumentando su recencia.
+            - "growth_potential": Oportunistas con buen gasto pero baja frecuencia.
+            - "inactive_vip": Ricos con alta recencia que necesitan reactivación.
+            - "new_high_value": Clientes nuevos con ticket muy alto (Oro/Plata).
+        limite: Número máximo de clientes a retornar (default 10).
+    """
+    supabase = get_supabase()
+    
+    # Obtener la fecha más reciente
+    res_fecha = supabase.table('segmentacion_clientes_raw').select('fecha_corte').order('fecha_corte', desc=True).limit(1).execute()
+    if not res_fecha.data:
+        return {"error": "No hay datos disponibles"}
+    
+    fecha_reciente = res_fecha.data[0]['fecha_corte']
+    query = supabase.table('segmentacion_clientes_raw').select('cliente_id, segmento_rfm, gasto_total, dias_recencia, num_facturas').eq('fecha_corte', fecha_reciente)
+    
+    if criterio == "churn_risk":
+        # Champions o casi recurrentes con recencia aumentando (>30 días)
+        query = query.in_('segmento_rfm', ['Champion', 'Champions casi recurrente']).gt('dias_recencia', 30)
+    elif criterio == "growth_potential":
+        # Oportunistas con potencial o nuevos con buen gasto (M >= 4)
+        query = query.in_('segmento_rfm', ['Oportunista con potencial', 'Activo Básico']).gte('gasto_total', 138)
+    elif criterio == "inactive_vip":
+        # Ricos perdidos o dormidos
+        query = query.in_('segmento_rfm', ['Rico perdido', 'Champions dormido'])
+    elif criterio == "new_high_value":
+        # Nuevos con gasto ORO o PLATA
+        query = query.in_('segmento_rfm', ['Rico potencial', 'Oportunista nuevo']).gte('gasto_total', 138)
+    
+    response = query.order('gasto_total', desc=True).limit(limite).execute()
+    
+    return {
+        "criterio": criterio,
+        "fecha_corte": fecha_reciente,
+        "total_encontrados": len(response.data),
+        "clientes": response.data
+    }
+
+
 def save_to_memory(categoria: str, contenido: str) -> dict:
     """
     Guarda información importante en la memoria de largo plazo del agente.
