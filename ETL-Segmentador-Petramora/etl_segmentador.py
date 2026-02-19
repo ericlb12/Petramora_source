@@ -1,6 +1,7 @@
 """
-ETL Segmentador Petramora
-Transforma datos de segmentacion RFM y los carga a Supabase
+ETL Segmentador Petramora (D.A.X. Sync Version 2.1)
+Transforma datos de segmentación RFM usando los scores numéricos 'orden' de Power BI
+y los carga a Supabase manejando limpieza de JSON (NaN/Inf).
 """
 
 import pandas as pd
@@ -17,243 +18,129 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-# Mapeo de columnas: Excel -> Supabase
-# Se usan las columnas estrictamente mensuales del CSV (Facturas, VentasTotales)
-COLUMN_MAPPING = {
+# Mapeo de columnas: Power BI Export -> Supabase
+CSV_COLS = {
     'ClienteRelacionado': 'cliente_id',
-    'FinDeMes': 'fecha_corte',
+    'Fecha_Fin_Mes': 'fecha_corte',
     'UltimaFactura': 'fecha_ultima_compra',
     'RecenciaDias': 'dias_recencia',
     'Facturas': 'num_facturas',
-    'VentasTotales': 'gasto_total'
+    'VentasTotales': 'gasto_total',
+    'Recencia seleccionada orden': 'score_r',
+    'Frecuencia seleccionada orden': 'score_f',
+    'Monetario seleccionada orden': 'score_m',
+    'Recencia Seleccionada': 'label_r',
+    'Frecuencia Seleccionada': 'label_f',
+    'Monetario Seleccionada': 'label_m'
 }
 
-def extract(file_path: str) -> pd.DataFrame:
-    """Lee el CSV de origen"""
-    print(f"Leyendo archivo: {file_path}")
-    df = pd.read_csv(file_path, encoding='utf-8-sig', sep=';', low_memory=False)
-    print(f"   Filas leidas: {len(df):,}")
-    print(f"   Columnas: {len(df.columns)}")
-    return df
-
 def convert_european_number(value):
-    """Convierte numeros con formato europeo (coma decimal) a float"""
+    """Convierte numeros con formato europeo (coma decimal) a float limpio"""
     if pd.isna(value):
         return 0.0
     if isinstance(value, (int, float)):
-        if math.isinf(value) or math.isnan(value):
-            return 0.0
-        return float(value)
+        return float(value) if not (math.isinf(value) or math.isnan(value)) else 0.0
     try:
-        result = float(str(value).replace(',', '.'))
-        if math.isinf(result) or math.isnan(result):
-            return 0.0
-        return result
+        val_str = str(value).replace(',', '.')
+        result = float(val_str)
+        return result if not (math.isinf(result) or math.isnan(result)) else 0.0
     except:
         return 0.0
 
-def clean_record(record):
-    """Limpia un registro para asegurar que sea JSON-compatible"""
-    cleaned = {}
-    for key, value in record.items():
-        if value is None:
-            cleaned[key] = None
-        elif isinstance(value, float):
-            if math.isinf(value) or math.isnan(value):
-                cleaned[key] = 0.0
-            else:
-                cleaned[key] = value
-        else:
-            cleaned[key] = value
-    return cleaned
-
 def calculate_segments(row):
-    """Aplica la lógica de segmentación oficial de Petramora"""
-    r = row['dias_recencia']
-    f = row['num_facturas']
-    m = row['gasto_total']
+    """Aplica la lógica de segmentación oficial de Petramora (Sincronizada con DAX)"""
+    sr = int(row['score_r'])
+    sf = int(row['score_f'])
+    sm = int(row['score_m'])
     
-    # 1. Definir Scores (1-5) y Etiquetas Base
-    # Recencia
-    if r < 30: 
-        seg_r, score_r = "RECURRENTE", 5
-    elif r < 90: 
-        seg_r, score_r = "ACTIVOS", 4
-    elif r < 180: 
-        seg_r, score_r = "REGULARES", 3
-    elif r < 365: 
-        seg_r, score_r = "DORMIDOS", 2
-    else: 
-        seg_r, score_r = "INACTIVOS", 1
+    r_code = f"{sr}{sf}{sm}"
+    score_rfm = int(r_code)
     
-    # Frecuencia
-    if f >= 20: 
-        seg_f, score_f = "SUPERLEALES", 5
-    elif f >= 10: 
-        seg_f, score_f = "LEALES", 4
-    elif f >= 4: 
-        seg_f, score_f = "BUENOS", 3
-    elif f >= 2: 
-        seg_f, score_f = "REGULARES", 2
-    else: 
-        seg_f, score_f = "1 COMPRA", 1
-    
-    # Monetario
-    if m > 277: 
-        seg_m, score_m = "ORO", 5
-    elif m >= 138: 
-        seg_m, score_m = "PLATA", 4
-    elif m >= 68: 
-        seg_m, score_m = "BRONCE 1", 3
-    elif m >= 41: 
-        seg_m, score_m = "BRONCE 2", 2
-    else: 
-        seg_m, score_m = "BRONCE 3", 1
-    
-    # 2. Score RFM Numérico (ej: 545)
-    score_total = (score_r * 100) + (score_f * 10) + score_m
-    
-    # 3. Clasificación Final - Segmento RFM (Lógica de Negocio Petramora)
-    # Se aplica en cascada (el primero que cumple se queda con el cliente)
-    
-    # 1. Champion (Lo mejor: Reciente, Fiel y con Gasto)
-    if score_r >= 4 and score_f >= 4 and score_m >= 4:
-        segmento = "Champion"
-    
-    # 2. Rico potencial (Gasto alto pero primera compra o poca lealtad aún)
-    elif score_r >= 3 and score_f == 1 and score_m >= 4:
-        segmento = "Rico potencial"
-        
-    # 3. Champions casi recurrente (VIPs recientes pero con lealtad media)
-    elif score_r >= 4 and score_m >= 4:
-        segmento = "Champions casi recurrente"
-        
-    # 4. Champions dormido (Eran top, ahora menos recientes)
-    elif 2 <= score_r <= 3 and score_f >= 4 and score_m >= 4:
-        segmento = "Champions dormido"
-        
-    # 5. Rico perdido (Alto valor histórico, ahora inactivo)
-    elif score_r <= 2 and score_m >= 4:
-        segmento = "Rico perdido"
-        
-    # 6. Oportunista nuevo (Primera compra reciente, ticket bajo)
-    elif score_r >= 3 and score_f == 1 and score_m <= 3:
-        segmento = "Oportunista nuevo"
-        
-    # 7. Activo Básico (Activos, ticket bajo/medio, repiten)
-    elif score_r >= 4 and score_m <= 3:
-        segmento = "Activo Básico"
-        
-    # 8. Oportunista con potencial (Moderadamente recientes, ticket medio, repiten)
-    elif score_r == 3:
-        segmento = "Oportunista con potencial"
-        
-    # 9. Oportunista perdido (Bajo valor, inactivos)
+    # 1) Champion
+    if r_code in ["444","445","454","455","544","545","554","555"]:
+        segmento, grupo = "Champion", "1. Champions"
+    # 2) Champions casi recurrente
+    elif r_code in ["424","425","434","435","441","442","443","451","452","453",
+                  "524","525","534","535","541","542","543","551","552","553"]:
+        segmento, grupo = "Champions casi recurrente", "1. Champions"
+    # 3) Champions dormido
+    elif r_code in ["234","235","244","245","254","255","334","335","344","345","354","355"]:
+        segmento, grupo = "Champions dormido", "1. Champions"
+    # 4) Activo Básico
+    elif r_code in ["421","422","423","431","432","433","521","522","523","531","532","533"]:
+        segmento, grupo = "Activo Básico", "3. Oportunistas"
+    # 5) Rico potencial
+    elif r_code in ["314","315","414","415","514","515"]:
+        segmento, grupo = "Rico potencial", "2. Ricos"
+    # 6) Oportunista nuevo
+    elif r_code in ["311","312","313","411","412","413","511","512","513"]:
+        segmento, grupo = "Oportunista nuevo", "3. Oportunistas"
+    # 7) Oportunista con potencial
+    elif r_code in ["321","322","323","324","325","331","332","333","341","342","343","351","352","353"]:
+        segmento, grupo = "Oportunista con potencial", "3. Oportunistas"
+    # 8) Rico perdido
+    elif r_code in ["114","115","124","125","134","135","144","145","154","155","214","215","224","225"]:
+        segmento, grupo = "Rico perdido", "2. Ricos"
     else:
-        segmento = "Oportunista perdido"
-    
-    # 4. Grupo General (grupo_segmento) - Visión de Negocio Macro
-    if "Champion" in segmento or (score_m == 5 and score_r >= 3):
-        grupo = "1. Champions"
-    elif "Rico" in segmento or score_m == 4:
-        grupo = "2. Ricos"
-    else:
-        grupo = "3. Oportunistas"
+        segmento, grupo = "Oportunista perdido", "3. Oportunistas"
         
-    return pd.Series([seg_r, seg_f, seg_m, score_total, segmento, grupo])
+    return pd.Series([score_rfm, segmento, grupo])
 
 def transform(df: pd.DataFrame) -> pd.DataFrame:
-    """Transforma y filtra las columnas necesarias"""
-    print("\nTransformando datos...")
+    """Transforma los datos y limpia para JSON compliance"""
+    print("\n[Transform] Limpiando datos y aplicando DAX...")
+    df.columns = [c.lstrip('\ufeff').strip().replace('??', 'u') for c in df.columns]
+    df_renamed = df.rename(columns=CSV_COLS)
     
-    # 1. Seleccionar solo las columnas que necesitamos
-    columns_to_keep = list(COLUMN_MAPPING.keys())
-    df_filtered = df[columns_to_keep].copy()
-    
-    # Validad que las columnas existen
-    missing = [c for c in columns_to_keep if c not in df.columns]
-    if missing:
-        raise ValueError(f"Faltan columnas en el CSV: {missing}")
-        
-    print(f"   Columnas filtradas: {len(columns_to_keep)} de {len(df.columns)}")
-    
-    # 2. Renombrar columnas segun el mapeo
-    df_filtered = df_filtered.rename(columns=COLUMN_MAPPING)
-    
-    # 3. Convertir fechas
-    df_filtered['fecha_corte'] = pd.to_datetime(df_filtered['fecha_corte'], dayfirst=True).dt.strftime('%Y-%m-%d')
-    df_filtered['fecha_ultima_compra'] = pd.to_datetime(df_filtered['fecha_ultima_compra'], dayfirst=True).dt.strftime('%Y-%m-%d')
-    
-    # 4. Limpiar valores y convertir numeros
-    df_filtered['num_facturas'] = df_filtered['num_facturas'].apply(convert_european_number).astype(int)
-    df_filtered['gasto_total'] = df_filtered['gasto_total'].apply(convert_european_number)
-    df_filtered['dias_recencia'] = df_filtered['dias_recencia'].fillna(0).astype(int)
-    
-    # 5. Calcular Segmentos RFM en Python
-    print("   Calculando nuevas reglas de segmentación...")
-    df_filtered[['seg_recencia', 'seg_frecuencia', 'seg_monetario', 'score_rfm', 'segmento_rfm', 'grupo_segmento']] = \
-        df_filtered.apply(calculate_segments, axis=1)
-    
-    # 6. Eliminar duplicados
-    df_filtered = df_filtered.drop_duplicates(subset=['cliente_id', 'fecha_corte'])
-    
-    print(f"\nRegistros listos para cargar: {len(df_filtered):,}")
-    return df_filtered
+    # Fallback para columnas faltantes
+    for m in [k for k in CSV_COLS.keys() if k not in df.columns]:
+        found = [c for c in df.columns if m in c]
+        if found: df_renamed = df_renamed.rename(columns={found[0]: CSV_COLS[m]})
 
-def load(df: pd.DataFrame, batch_size: int = 1000):
-    """Carga los datos a Supabase en batches"""
-    print(f"\nConectando a Supabase...")
+    # Seleccion y limpieza de NaNs/Infs
+    df_clean = df_renamed[['cliente_id', 'fecha_corte', 'fecha_ultima_compra', 'dias_recencia', 'num_facturas', 'gasto_total']].copy()
+    df_clean['num_facturas'] = df_clean['num_facturas'].apply(convert_european_number).astype(int)
+    df_clean['gasto_total'] = df_clean['gasto_total'].apply(convert_european_number)
+    df_clean['dias_recencia'] = df_clean['dias_recencia'].fillna(0).astype(int)
     
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise ValueError("Faltan credenciales. Revisa el archivo .env")
+    # Etiquetas y scores
+    df_clean['seg_recencia'] = df_renamed['label_r'].fillna('INACTIVO')
+    df_clean['seg_frecuencia'] = df_renamed['label_f'].fillna('1 COMPRA')
+    df_clean['seg_monetario'] = df_renamed['label_m'].fillna('BRONCE 3')
     
+    temp_scores = df_renamed[['score_r', 'score_f', 'score_m']].apply(pd.to_numeric, errors='coerce').fillna(1).astype(int)
+    df_clean[['score_rfm', 'segmento_rfm', 'grupo_segmento']] = temp_scores.apply(calculate_segments, axis=1)
+    
+    # Formateo fechas
+    df_clean['fecha_corte'] = pd.to_datetime(df_clean['fecha_corte'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+    df_clean['fecha_ultima_compra'] = pd.to_datetime(df_clean['fecha_ultima_compra'], dayfirst=True, errors='coerce').dt.strftime('%Y-%m-%d')
+    
+    # Limpieza final para JSON (reemplazar NaNs por None/0)
+    return df_clean.replace({np.nan: None, np.inf: 0, -np.inf: 0}).drop_duplicates(subset=['cliente_id', 'fecha_corte'])
+
+def load(df: pd.DataFrame, batch_size: int = 500):
+    """Carga a Supabase con upsert"""
+    if not SUPABASE_URL or not SUPABASE_KEY: raise ValueError("Faltan credenciales")
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("   Conexion establecida")
-    
-    # Convertir DataFrame a lista de diccionarios y limpiar cada registro
-    records = [clean_record(r) for r in df.to_dict('records')]
+    records = df.to_dict('records')
     total = len(records)
-    
-    print(f"\nCargando {total:,} registros en batches de {batch_size}...")
-    
-    loaded = 0
-    errors = 0
-    
+    print(f"\n[Load] Subiendo {total:,} registros...")
     for i in range(0, total, batch_size):
-        batch = records[i:i + batch_size]
+        batch = records[i:i+batch_size]
         try:
-            response = supabase.table('segmentacion_clientes_raw').upsert(
-                batch,
-                on_conflict='cliente_id,fecha_corte'
-            ).execute()
-            loaded += len(batch)
-            print(f"   Progreso: {loaded:,}/{total:,} ({100*loaded/total:.1f}%)")
+            supabase.table('segmentacion_clientes_raw').upsert(batch, on_conflict='cliente_id,fecha_corte').execute()
+            if (i+batch_size) % 5000 == 0 or (i+batch_size) >= total:
+                print(f"   - Progreso: {min(i+batch_size, total):,}/{total:,}")
         except Exception as e:
-            errors += len(batch)
-            print(f"   Error en batch {i//batch_size + 1}: {str(e)[:100]}")
-    
-    print(f"\n{'='*50}")
-    print(f"Carga completada")
-    print(f"   Registros cargados: {loaded:,}")
-    print(f"   Errores: {errors:,}")
-    print(f"{'='*50}")
+            print(f"   [Error] Lote {i//batch_size + 1}: {str(e)[:100]}")
 
 def main():
-    """Ejecuta el ETL completo"""
-    print("="*50)
-    print("ETL SEGMENTADOR PETRAMORA")
-    print(f"Inicio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*50)
-    
-    # Configuracion
-    INPUT_FILE = "segmentacion_clientes_raw.csv"
-    
-    # ETL
-    df_raw = extract(INPUT_FILE)
-    df_transformed = transform(df_raw)
-    load(df_transformed, batch_size=500)
-    
-    print(f"\nFin: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    INPUT_FILE = "Segmento_RFM_raw.csv"
+    PATH = INPUT_FILE if os.path.exists(INPUT_FILE) else os.path.join("ETL-Segmentador-Petramora", INPUT_FILE)
+    print(f"\n{'='*60}\nETL PETRAMORA: SYNC DAX 2.1 (JSON Clean)\n{'='*60}")
+    try:
+        df = pd.read_csv(PATH, sep=';', encoding='latin-1', low_memory=False)
+        load(transform(df))
+    except Exception as e: print(f"\n[CRITICAL ERROR] {e}")
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
