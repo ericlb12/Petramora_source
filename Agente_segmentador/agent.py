@@ -1,8 +1,8 @@
 """
-Agente Segmentador - Petramora v3.2
+Agente Segmentador - Petramora v4.0
 Google GenAI SDK con FunctionDeclarations explícitas
-- Nueva tool: get_customer_history
-- Todas las tools devuelven tabla_formateada
+- Esquema simplificado (10 columnas)
+- Solo último mes + histórico anual
 """
 
 import os
@@ -24,20 +24,18 @@ from config import (
 from prompts import SYSTEM_PROMPT
 from tools import (
     get_segment_distribution,
-    get_segment_evolution,
     get_segment_metrics,
     get_actionable_customers,
-    get_customer_history,
+    get_customer_detail,
 )
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
 
 TOOLS_MAP = {
     "get_segment_distribution": get_segment_distribution,
-    "get_segment_evolution": get_segment_evolution,
     "get_segment_metrics": get_segment_metrics,
     "get_actionable_customers": get_actionable_customers,
-    "get_customer_history": get_customer_history,
+    "get_customer_detail": get_customer_detail,
 }
 
 tool_declarations = types.Tool(
@@ -45,59 +43,24 @@ tool_declarations = types.Tool(
         types.FunctionDeclaration(
             name="get_segment_distribution",
             description=(
-                "Distribución de clientes por segmento RFM. "
+                "Distribución actual de clientes por segmento RFM. "
                 "Usa para: '¿cuántos clientes hay?' o '¿cómo se distribuyen?'"
             ),
             parameters_json_schema={
                 "type": "object",
-                "properties": {
-                    "fecha_corte": {
-                        "type": "string",
-                        "description": "Fecha YYYY-MM-DD. Sin especificar = más reciente."
-                    }
-                },
-                "required": []
-            }
-        ),
-        types.FunctionDeclaration(
-            name="get_segment_evolution",
-            description=(
-                "Evolución temporal de un segmento o todos. "
-                "Usa para: '¿cómo evolucionaron los Champions?' o '¿tendencia?'"
-            ),
-            parameters_json_schema={
-                "type": "object",
-                "properties": {
-                    "segmento": {
-                        "type": "string",
-                        "description": (
-                            "Nombre exacto: 'Champion', 'Champions casi recurrente', "
-                            "'Champions dormido', 'Rico potencial', 'Oportunista nuevo', "
-                            "'Oportunista con potencial', 'Oportunista perdido', 'Rico perdido', "
-                            "'Activo Básico'. Sin especificar = todos."
-                        )
-                    },
-                    "meses": {
-                        "type": "integer",
-                        "description": "Meses hacia atrás (default: 6)"
-                    }
-                },
+                "properties": {},
                 "required": []
             }
         ),
         types.FunctionDeclaration(
             name="get_segment_metrics",
             description=(
-                "Métricas por segmento: gasto, frecuencia, recencia. "
-                "Usa para: '¿cuánto gastan los Champions?' o '¿qué segmento genera más?'"
+                "Métricas agregadas (gasto histórico) por segmento. "
+                "Usa para: '¿cuánto gastan los Champions?' o '¿qué segmento genera más valor?'"
             ),
             parameters_json_schema={
                 "type": "object",
                 "properties": {
-                    "fecha_corte": {
-                        "type": "string",
-                        "description": "Fecha YYYY-MM-DD. Sin especificar = más reciente."
-                    },
                     "segmento": {
                         "type": "string",
                         "description": "Filtrar por segmento. Sin especificar = todos."
@@ -109,8 +72,8 @@ tool_declarations = types.Tool(
         types.FunctionDeclaration(
             name="get_actionable_customers",
             description=(
-                "HERRAMIENTA PRINCIPAL. Lista de clientes concretos (nombres reales) "
-                "que necesitan atención HOY. Prioriza Champions dormido. "
+                "HERRAMIENTA PRINCIPAL. Lista de clientes concretos que necesitan atención HOY. "
+                "Prioriza Champions dormido. "
                 "Usa para: '¿a quién llamo?', '¿a quién contactar?', '¿clientes en riesgo?'"
             ),
             parameters_json_schema={
@@ -119,9 +82,8 @@ tool_declarations = types.Tool(
                     "criterio": {
                         "type": "string",
                         "description": (
-                            "'today' (default, priorizada), 'churn_risk', "
-                            "'growth_potential', 'inactive_vip', 'new_high_value', "
-                            "'top_historical' (mejores clientes por gasto histórico total)."
+                            "'today' (default), 'churn_risk', 'growth_potential', "
+                            "'inactive_vip', 'new_high_value', 'top_historical'."
                         )
                     },
                     "limite": {
@@ -133,18 +95,17 @@ tool_declarations = types.Tool(
             }
         ),
         types.FunctionDeclaration(
-            name="get_customer_history",
+            name="get_customer_detail",
             description=(
-                "Historial completo de UN cliente específico: segmento, gasto y cambios mes a mes. "
-                "Usa para: '¿Beatriz Pizarro siempre fue Champions dormido?', "
-                "'Dime el historial de X', '¿Cuánto ha gastado X en total?'"
+                "Detalle de un cliente específico: segmento, gasto por año (2024-2026). "
+                "Usa para: '¿Por qué llamar a Beatriz?', 'Dime sobre X', '¿Cuánto gastó X en 2024?'"
             ),
             parameters_json_schema={
                 "type": "object",
                 "properties": {
                     "cliente_id": {
                         "type": "string",
-                        "description": "Nombre exacto del cliente tal como aparece en la base de datos."
+                        "description": "Nombre del cliente."
                     }
                 },
                 "required": ["cliente_id"]
@@ -153,10 +114,6 @@ tool_declarations = types.Tool(
     ]
 )
 
-
-# ─────────────────────────────────────────────
-# Logging y sesiones
-# ─────────────────────────────────────────────
 
 def log_interaction(session_id, user_message, agent_response, tools_called, model_used, latency_ms, error=None):
     try:
@@ -343,7 +300,7 @@ def chat(user_message, session_id=None, history=None):
 
 def main():
     print("=" * 50)
-    print("AGENTE SEGMENTADOR - PETRAMORA v3.2")
+    print("AGENTE SEGMENTADOR - PETRAMORA v4.0")
     print("=" * 50)
     print("Escribe 'salir' para terminar")
     print("Escribe 'nueva' para nueva sesión\n")
