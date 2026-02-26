@@ -1,17 +1,73 @@
 """
-Tools del Agente Segmentador v4.0
+Tools del Agente Segmentador v5.0
 - Esquema simplificado: solo último mes, 10 columnas
 - Ventas/facturas por año (2024, 2025, 2026)
 - gasto_historico = ventas_2024 + ventas_2025 + ventas_2026 (directo, sin queries extra)
+- get_actionable_customers agrupa por segmento con orden de prioridad
 - Todas las tools devuelven "tabla_formateada" con markdown listo
 """
 
-import os
 from datetime import datetime, date
-from config import get_supabase, MEMORY_FILE
+from config import get_supabase
 
 
-SEGMENTOS_PRIORIDAD_TODAY = [
+# ─────────────────────────────────────────────
+# PRIORIDAD Y ACCIONES POR SEGMENTO
+# ─────────────────────────────────────────────
+
+SEGMENTOS_PRIORIDAD = [
+    {
+        "segmento": "Champions dormido",
+        "prioridad": "🔴 URGENTE — Llamar HOY",
+        "accion": "Llamada de relación, no de venta. Preguntar cómo va todo, detectar si hay un problema. Gastaban mucho y se están enfriando.",
+    },
+    {
+        "segmento": "Rico perdido",
+        "prioridad": "🔴 URGENTE — Llamar HOY",
+        "accion": "Llamada de recuperación. Entender qué pasó, si hubo problema con el servicio o se fueron a la competencia. Considerar condiciones especiales.",
+    },
+    {
+        "segmento": "Champions casi recurrente",
+        "prioridad": "🟡 IMPORTANTE — Llamar esta semana",
+        "accion": "Llamada de desarrollo. Ofrecer productos complementarios, proponer pedido recurrente. Son buenos clientes activos que podrían comprar más.",
+    },
+    {
+        "segmento": "Rico potencial",
+        "prioridad": "🟡 IMPORTANTE — Llamar esta semana",
+        "accion": "Seguimiento post-primera compra grande. Preguntar cómo les fue con el producto, abrir puerta a pedidos regulares.",
+    },
+    {
+        "segmento": "Oportunista con potencial",
+        "prioridad": "🟢 NORMAL — Llamar este mes",
+        "accion": "Entender su negocio. ¿Compran poco porque no necesitan más o porque compran el resto en otro sitio? Oportunidad de ampliar catálogo.",
+    },
+    {
+        "segmento": "Oportunista nuevo",
+        "prioridad": "🟢 NORMAL — Llamar este mes",
+        "accion": "Seguimiento post-venta básico. ¿Quedaron satisfechos? ¿Conocen el resto del catálogo? Sin presionar.",
+    },
+    {
+        "segmento": "Activo Básico",
+        "prioridad": "⚪ BAJO — Mantenimiento",
+        "accion": "No requieren llamada urgente. Candidatos a campañas de upselling por email o WhatsApp.",
+    },
+    {
+        "segmento": "Champion",
+        "prioridad": "⚪ BAJO — Fidelización",
+        "accion": "No necesitan llamada de venta. Llamada de agradecimiento y fidelización. Ya son los mejores clientes.",
+    },
+    {
+        "segmento": "Oportunista perdido",
+        "prioridad": "⚪ BAJO — Solo campañas masivas",
+        "accion": "Compraban poco y se fueron. No merece llamada individual. Incluir en campañas masivas de reactivación.",
+    },
+]
+
+# Mapa rápido segmento → info de prioridad
+SEGMENTO_INFO = {s["segmento"]: s for s in SEGMENTOS_PRIORIDAD}
+
+# Segmentos que se incluyen en "¿a quién llamo hoy?" (los urgentes + importantes)
+SEGMENTOS_LLAMAR_HOY = [
     "Champions dormido",
     "Rico perdido",
     "Champions casi recurrente",
@@ -109,7 +165,6 @@ def get_segment_metrics(segmento: str = None) -> dict:
     if not response.data:
         return {"error": f"No hay datos{' para ' + segmento if segmento else ''}"}
 
-    # Agregar métricas por segmento
     metricas = {}
     gasto_global = 0
     for row in response.data:
@@ -124,7 +179,6 @@ def get_segment_metrics(segmento: str = None) -> dict:
         metricas[seg]['gasto_total'] += gasto_hist
         metricas[seg]['facturas_total'] += facturas_hist
 
-    # Ordenar por gasto total descendente
     metricas = dict(sorted(metricas.items(), key=lambda x: x[1]['gasto_total'], reverse=True))
 
     resultado = {}
@@ -161,99 +215,252 @@ def get_segment_metrics(segmento: str = None) -> dict:
 
 def get_actionable_customers(criterio: str = "today", limite: int = 10) -> dict:
     """
-    Lista de clientes a contactar HOY, ordenados por prioridad de negocio.
-    Criterios: today, churn_risk, growth_potential, inactive_vip, new_high_value, top_historical
+    Lista de clientes a contactar, agrupados por segmento en orden de prioridad.
+    Criterios:
+      - 'today': Clientes urgentes a llamar hoy (Champions dormido, Rico perdido,
+                 Champions casi recurrente, Rico potencial).
+      - 'churn_risk': Clientes en riesgo de fuga.
+      - 'growth_potential': Clientes con potencial de crecimiento.
+      - 'inactive_vip': VIPs inactivos.
+      - 'new_high_value': Nuevos clientes de alto valor.
+      - 'top_historical': Top clientes por gasto histórico total.
+      - 'all_segments': Todos los segmentos con acción sugerida.
     """
     supabase = get_supabase()
 
     if criterio == "today":
-        clientes = []
-        restantes = limite
-
-        for segmento in SEGMENTOS_PRIORIDAD_TODAY:
-            if restantes <= 0:
-                break
-            response = (
-                supabase.table('segmentacion_clientes_raw')
-                .select(COLS_BASE)
-                .eq('segmento_rfm', segmento)
-                .limit(restantes * 2)
-                .execute()
-            )
-            if response.data:
-                for row in response.data:
-                    clientes.append({
-                        "cliente_id": row['cliente_id'],
-                        "segmento_rfm": row['segmento_rfm'],
-                        "gasto_historico": _calcular_gasto_historico(row),
-                        "dias_recencia": _calcular_dias_recencia(row.get('fecha_ultima_compra')),
-                    })
-                restantes -= len(response.data)
-
-        # Ordenar por gasto histórico descendente y limitar
-        clientes.sort(key=lambda x: -x['gasto_historico'])
-        clientes = clientes[:limite]
+        return _actionable_today(supabase, limite)
+    elif criterio == "all_segments":
+        return _actionable_all_segments(supabase, limite)
     else:
-        query = supabase.table('segmentacion_clientes_raw').select(COLS_BASE)
+        return _actionable_by_filter(supabase, criterio, limite)
 
-        if criterio == "churn_risk":
-            query = query.in_('segmento_rfm', ['Champion', 'Champions casi recurrente'])
-        elif criterio == "growth_potential":
-            query = query.in_('segmento_rfm', ['Oportunista con potencial', 'Activo Básico'])
-        elif criterio == "inactive_vip":
-            query = query.in_('segmento_rfm', ['Rico perdido', 'Champions dormido'])
-        elif criterio == "new_high_value":
-            query = query.in_('segmento_rfm', ['Rico potencial', 'Oportunista nuevo'])
-        elif criterio == "top_historical":
-            pass  # No filtrar — traer todos
 
-        fetch_limit = limite * 3 if criterio == "top_historical" else limite * 2
+def _actionable_today(supabase, limite: int) -> dict:
+    """
+    Agrupa clientes por segmento en orden de prioridad de llamada.
+    Cada segmento incluye su acción sugerida.
+    """
+    grupos = []
+    clientes_total = []
+
+    for segmento in SEGMENTOS_LLAMAR_HOY:
+        info = SEGMENTO_INFO[segmento]
+
+        response = (
+            supabase.table('segmentacion_clientes_raw')
+            .select(COLS_BASE)
+            .eq('segmento_rfm', segmento)
+            .limit(limite)
+            .execute()
+        )
+
+        if not response.data:
+            continue
+
+        clientes_seg = []
+        for row in response.data:
+            cliente = {
+                "cliente_id": row['cliente_id'],
+                "segmento_rfm": segmento,
+                "gasto_historico": _calcular_gasto_historico(row),
+                "dias_recencia": _calcular_dias_recencia(row.get('fecha_ultima_compra')),
+            }
+            clientes_seg.append(cliente)
+
+        # Ordenar por gasto histórico descendente dentro del segmento
+        clientes_seg.sort(key=lambda x: -x['gasto_historico'])
+        clientes_seg = clientes_seg[:limite]
+
+        grupos.append({
+            "segmento": segmento,
+            "prioridad": info["prioridad"],
+            "accion": info["accion"],
+            "clientes": clientes_seg,
+        })
+        clientes_total.extend(clientes_seg)
+
+    # Generar tabla formateada agrupada
+    tabla = _formatear_tabla_agrupada(grupos, limite)
+
+    return {
+        "criterio": "today",
+        "fecha_consulta": date.today().isoformat(),
+        "total_encontrados": len(clientes_total),
+        "grupos": grupos,
+        "clientes": clientes_total,
+        "tabla_formateada": tabla,
+    }
+
+
+def _actionable_all_segments(supabase, limite: int) -> dict:
+    """
+    Muestra todos los segmentos con su prioridad y acción, incluyendo clientes ejemplo.
+    """
+    grupos = []
+    clientes_total = []
+
+    for seg_info in SEGMENTOS_PRIORIDAD:
+        segmento = seg_info["segmento"]
+
+        response = (
+            supabase.table('segmentacion_clientes_raw')
+            .select(COLS_BASE)
+            .eq('segmento_rfm', segmento)
+            .limit(limite)
+            .execute()
+        )
+
+        clientes_seg = []
+        for row in (response.data or []):
+            cliente = {
+                "cliente_id": row['cliente_id'],
+                "segmento_rfm": segmento,
+                "gasto_historico": _calcular_gasto_historico(row),
+                "dias_recencia": _calcular_dias_recencia(row.get('fecha_ultima_compra')),
+            }
+            clientes_seg.append(cliente)
+
+        clientes_seg.sort(key=lambda x: -x['gasto_historico'])
+        clientes_seg = clientes_seg[:limite]
+
+        grupos.append({
+            "segmento": segmento,
+            "prioridad": seg_info["prioridad"],
+            "accion": seg_info["accion"],
+            "clientes": clientes_seg,
+        })
+        clientes_total.extend(clientes_seg)
+
+    tabla = _formatear_tabla_agrupada(grupos, limite)
+
+    return {
+        "criterio": "all_segments",
+        "fecha_consulta": date.today().isoformat(),
+        "total_encontrados": len(clientes_total),
+        "grupos": grupos,
+        "clientes": clientes_total,
+        "tabla_formateada": tabla,
+    }
+
+
+def _actionable_by_filter(supabase, criterio: str, limite: int) -> dict:
+    """
+    Filtra clientes por criterio específico (churn_risk, growth_potential, etc.)
+    """
+    query = supabase.table('segmentacion_clientes_raw').select(COLS_BASE)
+
+    if criterio == "churn_risk":
+        query = query.in_('segmento_rfm', ['Champion', 'Champions casi recurrente'])
+    elif criterio == "growth_potential":
+        query = query.in_('segmento_rfm', ['Oportunista con potencial', 'Activo Básico'])
+    elif criterio == "inactive_vip":
+        query = query.in_('segmento_rfm', ['Rico perdido', 'Champions dormido'])
+    elif criterio == "new_high_value":
+        query = query.in_('segmento_rfm', ['Rico potencial', 'Oportunista nuevo'])
+    elif criterio == "top_historical":
+        pass  # No filtrar — traer todos
+
+    fetch_limit = limite * 2
+    if criterio == "top_historical":
+        # Traer TODOS para poder ordenar por gasto calculado en Python
+        response = query.execute()
+    else:
         response = query.limit(fetch_limit).execute()
 
-        clientes = []
-        for row in (response.data or []):
-            gasto_hist = _calcular_gasto_historico(row)
-            # Filtrar growth_potential y new_high_value por gasto mínimo
-            if criterio == "growth_potential" and gasto_hist < 138:
-                continue
-            if criterio == "new_high_value" and gasto_hist < 138:
-                continue
-            clientes.append({
-                "cliente_id": row['cliente_id'],
-                "segmento_rfm": row['segmento_rfm'],
-                "gasto_historico": gasto_hist,
-                "dias_recencia": _calcular_dias_recencia(row.get('fecha_ultima_compra')),
-            })
+    clientes = []
+    for row in (response.data or []):
+        gasto_hist = _calcular_gasto_historico(row)
+        if criterio in ("growth_potential", "new_high_value") and gasto_hist < 138:
+            continue
+        clientes.append({
+            "cliente_id": row['cliente_id'],
+            "segmento_rfm": row['segmento_rfm'],
+            "gasto_historico": gasto_hist,
+            "dias_recencia": _calcular_dias_recencia(row.get('fecha_ultima_compra')),
+        })
 
-        clientes.sort(key=lambda x: -x['gasto_historico'])
-        clientes = clientes[:limite]
+    clientes.sort(key=lambda x: -x['gasto_historico'])
+    clientes = clientes[:limite]
 
-    # Generar tabla formateada
-    if criterio == "top_historical":
-        titulo = f"**Top {len(clientes)} clientes por gasto histórico**"
-    else:
-        titulo = f"**Clientes a contactar hoy ({date.today().isoformat()})**"
+    # Agrupar por segmento para tabla formateada
+    grupos_dict = {}
+    for c in clientes:
+        seg = c['segmento_rfm']
+        if seg not in grupos_dict:
+            info = SEGMENTO_INFO.get(seg, {"prioridad": "", "accion": ""})
+            grupos_dict[seg] = {
+                "segmento": seg,
+                "prioridad": info.get("prioridad", ""),
+                "accion": info.get("accion", ""),
+                "clientes": [],
+            }
+        grupos_dict[seg]["clientes"].append(c)
 
-    lines = ["| # | Cliente | Segmento | Gasto histórico (€) | Días sin comprar |",
-             "|---:|:---|:---|---:|---:|"]
-    for i, c in enumerate(clientes, 1):
-        lines.append(f"| {i} | {c['cliente_id']} | {c['segmento_rfm']} | {c['gasto_historico']:,.2f} | {c['dias_recencia']} |")
+    # Ordenar grupos por prioridad definida
+    orden_segmentos = [s["segmento"] for s in SEGMENTOS_PRIORIDAD]
+    grupos = sorted(
+        grupos_dict.values(),
+        key=lambda g: orden_segmentos.index(g["segmento"]) if g["segmento"] in orden_segmentos else 99
+    )
 
-    tabla = titulo + "\n\n" + "\n".join(lines)
+    titulo_map = {
+        "churn_risk": "Clientes en riesgo de fuga",
+        "growth_potential": "Clientes con potencial de crecimiento",
+        "inactive_vip": "VIPs inactivos",
+        "new_high_value": "Nuevos clientes de alto valor",
+        "top_historical": f"Top {len(clientes)} clientes por gasto histórico",
+    }
+    titulo = titulo_map.get(criterio, criterio)
+    tabla = _formatear_tabla_agrupada(grupos, limite, titulo_override=titulo)
 
     return {
         "criterio": criterio,
         "fecha_consulta": date.today().isoformat(),
         "total_encontrados": len(clientes),
-        "tabla_formateada": tabla,
+        "grupos": grupos,
         "clientes": clientes,
+        "tabla_formateada": tabla,
     }
+
+
+def _formatear_tabla_agrupada(grupos: list, limite: int, titulo_override: str = None) -> str:
+    """
+    Genera tabla markdown agrupada por segmento con prioridad y acción.
+    """
+    hoy = date.today().isoformat()
+    titulo = titulo_override or f"Clientes a contactar ({hoy})"
+    lines = [f"**{titulo}**\n"]
+
+    for grupo in grupos:
+        if not grupo["clientes"]:
+            continue
+
+        segmento = grupo["segmento"]
+        prioridad = grupo["prioridad"]
+        accion = grupo["accion"]
+        n_clientes = len(grupo["clientes"])
+
+        lines.append(f"### {prioridad}")
+        lines.append(f"**{segmento}** ({n_clientes} clientes)")
+        lines.append(f"_Acción: {accion}_\n")
+        lines.append("| # | Cliente | Gasto histórico (€) | Días sin comprar |")
+        lines.append("|---:|:---|---:|---:|")
+
+        for i, c in enumerate(grupo["clientes"], 1):
+            lines.append(
+                f"| {i} | {c['cliente_id']} | {c['gasto_historico']:,.2f} | {c['dias_recencia']} |"
+            )
+        lines.append("")  # línea en blanco entre grupos
+
+    return "\n".join(lines)
 
 
 def get_customer_detail(cliente_id: str) -> dict:
     """
     Detalle completo de un cliente: segmento, gasto por año, facturas por año.
-    Usa para: '¿Quién es UXÍA DOMÍNGUEZ?', 'Dime sobre cliente X'
+    Incluye acción sugerida basada en su segmento.
+    Usa para: '¿Por qué llamar a Beatriz?', 'Dime sobre X', '¿Cuánto gastó X en 2024?'
     """
     supabase = get_supabase()
 
@@ -288,6 +495,12 @@ def get_customer_detail(cliente_id: str) -> dict:
     gasto_hist = _calcular_gasto_historico(row)
     facturas_hist = _calcular_facturas_historico(row)
     dias_recencia = _calcular_dias_recencia(row.get('fecha_ultima_compra'))
+    segmento = row['segmento_rfm'] or 'Sin Clasificar'
+
+    # Obtener acción sugerida del segmento
+    seg_info = SEGMENTO_INFO.get(segmento, {})
+    accion = seg_info.get("accion", "Sin acción definida para este segmento.")
+    prioridad = seg_info.get("prioridad", "")
 
     # Tabla desglose por año
     lines = ["| Año | Ventas (€) | Facturas |", "|:---|---:|---:|"]
@@ -298,20 +511,25 @@ def get_customer_detail(cliente_id: str) -> dict:
     lines.append(f"| **TOTAL** | **{gasto_hist:,.2f}** | **{facturas_hist}** |")
 
     resumen = f"**{row['cliente_id']}**\n"
-    resumen += f"- Segmento actual: {row['segmento_rfm']}\n"
-    resumen += f"- Gasto histórico total: {gasto_hist:,.2f}€\n"
+    resumen += f"- Segmento: {segmento}\n"
+    if prioridad:
+        resumen += f"- Prioridad: {prioridad}\n"
+    resumen += f"- Gasto histórico: {gasto_hist:,.2f}€\n"
     resumen += f"- Días sin comprar: {dias_recencia}\n"
-    resumen += f"- Última compra: {row.get('fecha_ultima_compra', '?')}\n\n"
+    resumen += f"- Última compra: {row.get('fecha_ultima_compra', '?')}\n"
+    resumen += f"- **Acción sugerida:** {accion}\n\n"
 
     tabla = resumen + "\n".join(lines)
 
     return {
         "cliente_id": row['cliente_id'],
-        "segmento_rfm": row['segmento_rfm'],
+        "segmento_rfm": segmento,
         "gasto_historico": gasto_hist,
         "facturas_historico": facturas_hist,
         "dias_recencia": dias_recencia,
         "fecha_ultima_compra": row.get('fecha_ultima_compra'),
+        "accion_sugerida": accion,
+        "prioridad": prioridad,
         "desglose_anual": {
             "ventas_2024": float(row.get('ventas_2024') or 0),
             "ventas_2025": float(row.get('ventas_2025') or 0),
@@ -322,40 +540,3 @@ def get_customer_detail(cliente_id: str) -> dict:
         },
         "tabla_formateada": tabla,
     }
-
-
-def save_to_memory(categoria: str, contenido: str) -> dict:
-    categorias_validas = ["preferencias", "insights", "decisiones", "notas"]
-    if categoria.lower() not in categorias_validas:
-        return {"error": f"Categoría inválida. Usa: {', '.join(categorias_validas)}"}
-
-    categoria = categoria.lower()
-    fecha = datetime.now().strftime("%Y-%m-%d")
-    os.makedirs(os.path.dirname(MEMORY_FILE), exist_ok=True)
-
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            memory_content = f.read()
-    else:
-        memory_content = "# Memoria del Agente Segmentador\n\n## Preferencias del usuario\n\n## Insights importantes\n\n## Decisiones de negocio\n\n## Notas\n"
-
-    seccion_map = {
-        "preferencias": "## Preferencias del usuario",
-        "insights": "## Insights importantes",
-        "decisiones": "## Decisiones de negocio",
-        "notas": "## Notas"
-    }
-    seccion = seccion_map[categoria]
-    nueva_entrada = f"- [{fecha}] {contenido}"
-
-    if seccion in memory_content:
-        pos = memory_content.find(seccion) + len(seccion)
-        pos_newline = memory_content.find('\n', pos)
-        if pos_newline != -1:
-            memory_content = memory_content[:pos_newline + 1] + nueva_entrada + '\n' + memory_content[pos_newline + 1:]
-    else:
-        memory_content += f"\n{seccion}\n{nueva_entrada}\n"
-
-    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-        f.write(memory_content)
-    return {"success": True, "mensaje": f"Guardado en '{categoria}': {contenido}", "fecha": fecha}

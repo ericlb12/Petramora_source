@@ -1,15 +1,15 @@
 """
-ETL Segmentador Petramora (v4.0 — Simplificado)
-Solo sube el último mes con 10 columnas esenciales.
+ETL Segmentador Petramora (v5.0 — Simplificado)
+Solo sube el último mes con 11 columnas esenciales.
 Fuente de verdad: Power BI / DAX.
 
-Columnas que sube a Supabase (10):
+Columnas que sube a Supabase (11):
   - cliente_id, fecha_corte, fecha_ultima_compra, segmento_rfm
   - ventas_2024, ventas_2025, ventas_2026
   - facturas_2024, facturas_2025, facturas_2026
+  - gasto_total
 
 Derivados en las tools del agente (NO en el ETL):
-  - gasto_historico = ventas_2024 + ventas_2025 + ventas_2026
   - dias_recencia = hoy - fecha_ultima_compra
 """
 
@@ -31,7 +31,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
 # ─────────────────────────────────────────────
 # Mapeo de columnas: Power BI CSV → Supabase
-# 10 columnas — lo mínimo necesario
 # ─────────────────────────────────────────────
 CSV_COLS = {
     'ClienteRelacionado': 'cliente_id',
@@ -43,6 +42,7 @@ CSV_COLS = {
     'Facturas_2024_c': 'facturas_2024',
     'Facturas_2025_c': 'facturas_2025',
     'Facturas_2026_c': 'facturas_2026',
+    'Gasto_Total_c': 'gasto_total',
 }
 
 # La columna de segmento tiene encoding raro — se busca dinámicamente
@@ -60,6 +60,7 @@ SUPABASE_COLS = [
     'facturas_2024',
     'facturas_2025',
     'facturas_2026',
+    'gasto_total',
 ]
 
 
@@ -131,7 +132,7 @@ def transform(df: pd.DataFrame) -> pd.DataFrame:
     # ── Limpieza de datos ──
 
     # Números: formato europeo + NaN/Inf
-    for col in ['ventas_2024', 'ventas_2025', 'ventas_2026']:
+    for col in ['ventas_2024', 'ventas_2025', 'ventas_2026', 'gasto_total']:
         df_clean[col] = df_clean[col].apply(convert_european_number)
     for col in ['facturas_2024', 'facturas_2025', 'facturas_2026']:
         df_clean[col] = df_clean[col].apply(convert_european_number).astype(int)
@@ -206,7 +207,7 @@ def main():
     PATH = INPUT_FILE if os.path.exists(INPUT_FILE) else os.path.join("ETL-Segmentador-Petramora", INPUT_FILE)
 
     print(f"\n{'=' * 60}")
-    print(f"ETL PETRAMORA v4.0 — Simplificado (solo último mes)")
+    print(f"ETL PETRAMORA v5.0 — Simplificado (solo último mes)")
     print(f"{'=' * 60}")
 
     try:

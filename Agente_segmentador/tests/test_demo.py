@@ -1,5 +1,5 @@
 """
-DEMO para presentación — Agente Segmentador Petramora
+DEMO para presentación — Agente Segmentador Petramora v5.0
 10 preguntas conversacionales que muestran todas las capacidades.
 Sesión compartida para flujo natural de conversación.
 
@@ -20,39 +20,39 @@ def main():
     history = []
 
     preguntas = [
-        # 1. Visión general — ¿cuántos clientes tenemos?
+        # 1. Visión general
         "¿Cuántos clientes tenemos y cómo se distribuyen?",
 
         # 2. Acción inmediata — la pregunta estrella
         "¿A quién debería llamar hoy?",
 
-        # 3. Profundización bajo demanda
-        "¿Por qué Jose Luis Pego es el primero de la lista?",
+        # 3. Profundización — por qué llamar a alguien
+        "¿Por qué debería llamar al primero de la lista?",
 
-        # 4. Historial individual — poder ver la historia de un cliente
-        "Muéstrame todo el historial de Jose Luis Pego Alonso",
+        # 4. Detalle individual
+        "Dime todo sobre ese cliente",
 
-        # 5. Tendencia preocupante — evolución de Champions
-        "¿Cómo han evolucionado nuestros Champions en los últimos 6 meses?",
+        # 5. Visión de negocio — métricas por segmento
+        "¿Qué segmento genera más ingresos?",
 
-        # 6. Visión de negocio — entender qué está pasando
-        "¿Estamos ganando o perdiendo clientes valiosos?",
-
-        # 7. Top clientes — saber quiénes son los VIPs
+        # 6. Top clientes
         "¿Quiénes son nuestros 5 mejores clientes por gasto histórico?",
 
-        # 8. Estrategia de retención — recomendación inteligente
+        # 7. Estrategia de retención
         "¿Qué segmentos deberíamos priorizar para retención?",
 
-        # 9. Métricas de negocio — ingresos por segmento
-        "¿Qué segmento nos genera más ingresos este mes?",
+        # 8. Clientes en riesgo
+        "¿Qué clientes están en riesgo de irse?",
 
-        # 10. Cierre — clientes nuevos con potencial
+        # 9. Todos los segmentos con acciones
+        "Dame un resumen de todos los segmentos con las acciones que debo tomar",
+
+        # 10. Clientes nuevos con potencial
         "¿Tenemos clientes nuevos que valga la pena fidelizar?",
     ]
 
     print("\n" + "=" * 70)
-    print("  🎯 DEMO — AGENTE SEGMENTADOR PETRAMORA")
+    print("  🎯 DEMO — AGENTE SEGMENTADOR PETRAMORA v5.0")
     print("  Análisis inteligente de 24,000+ clientes")
     print("=" * 70)
 
@@ -75,14 +75,14 @@ def main():
     print("""
   Capacidades demostradas:
   ✓ Distribución de clientes por segmento
-  ✓ Lista priorizada de clientes a contactar hoy
-  ✓ Explicación inteligente de por qué contactar a cada cliente
-  ✓ Historial completo de un cliente individual
-  ✓ Evolución temporal de segmentos (tendencias)
-  ✓ Análisis de ganancia/pérdida de clientes valiosos
+  ✓ Lista priorizada de clientes a contactar hoy (agrupada por segmento)
+  ✓ Explicación de por qué contactar a cada cliente
+  ✓ Detalle completo de un cliente con desglose anual
+  ✓ Métricas de ingresos por segmento
   ✓ Ranking de mejores clientes por gasto histórico
   ✓ Recomendación estratégica de retención
-  ✓ Métricas de ingresos por segmento
+  ✓ Identificación de clientes en riesgo de fuga
+  ✓ Resumen de todos los segmentos con acciones sugeridas
   ✓ Identificación de clientes nuevos con potencial
 """)
 
