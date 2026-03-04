@@ -22,9 +22,6 @@ FALLBACK_MODEL = "gemini-2.5-flash-lite"    # Fallback económico (estable, func
 MAX_RETRIES = 3
 RETRY_DELAY = 2  # segundos base (se multiplica con backoff exponencial)
 
-# Rutas de memoria
-MEMORY_FILE = "memory/MEMORY.md"
-
 # Cliente Supabase (singleton)
 _supabase_client = None
 

@@ -139,6 +139,86 @@ def _fetch_all_rows(supabase, select_cols: str, filtro_segmento: str = None) -> 
     return all_rows
 
 
+_COLS_LINEAS = 'familia, ventas_netas, codigo_producto, descripcion, margen_prom, descuento_prom'
+
+
+def _fetch_all_lines(supabase, cliente_id: str) -> list:
+    """
+    Pagina todas las líneas de un cliente en lineas_cliente_producto.
+    Necesario porque PostgREST tiene max_rows=1,000 por request.
+    """
+    all_rows = []
+    batch = 1000
+    offset = 0
+    while True:
+        response = (
+            supabase.table('lineas_cliente_producto')
+            .select(_COLS_LINEAS)
+            .eq('cliente_id', cliente_id)
+            .range(offset, offset + batch - 1)
+            .execute()
+        )
+        if not response.data:
+            break
+        all_rows.extend(response.data)
+        if len(response.data) < batch:
+            break
+        offset += batch
+    return all_rows
+
+
+def _top_productos_familia(supabase, familia: str, limite: int = 10) -> list:
+    """
+    Top productos de una familia por ventas agregadas (todos los clientes).
+    Muestra las 1,000 transacciones más altas y agrega por producto.
+    """
+    response = (
+        supabase.table('lineas_cliente_producto')
+        .select(_COLS_LINEAS)
+        .eq('familia', familia)
+        .order('ventas_netas', desc=True)
+        .limit(1000)
+        .execute()
+    )
+    if not response.data:
+        return []
+
+    productos: dict[str, dict] = {}
+    for l in response.data:
+        key = l.get('codigo_producto') or ''
+        v = float(l.get('ventas_netas') or 0)
+        m = float(l.get('margen_prom') or 0)
+        d = float(l.get('descuento_prom') or 0)
+        if key not in productos:
+            productos[key] = {
+                'codigo_producto': key,
+                'descripcion': l.get('descripcion', ''),
+                'familia': familia,
+                'ventas_total': 0.0,
+                'margen_sum': 0.0,
+                'descuento_sum': 0.0,
+                'lineas': 0,
+            }
+        productos[key]['ventas_total'] += v
+        productos[key]['margen_sum'] += m
+        productos[key]['descuento_sum'] += d
+        productos[key]['lineas'] += 1
+
+    result = []
+    for p in sorted(productos.values(), key=lambda x: -x['ventas_total'])[:limite]:
+        n = p['lineas']
+        result.append({
+            'codigo_producto': p['codigo_producto'],
+            'descripcion': p['descripcion'],
+            'familia': p['familia'],
+            'ventas_total': round(p['ventas_total'], 2),
+            'margen_prom': round(p['margen_sum'] / n * 100, 1) if n else 0,
+            'descuento_prom': round(p['descuento_sum'] / n, 1) if n else 0,
+        })
+
+    return result
+
+
 def get_segment_distribution() -> dict:
     supabase = get_supabase()
     rows = _fetch_all_rows(supabase, 'segmento_rfm')
@@ -224,36 +304,41 @@ def get_segment_metrics(segmento: str = None) -> dict:
     }
 
 
-def get_actionable_customers(criterio: str = "today", limite: int = 10) -> dict:
+def get_actionable_customers(criterio: str = "today", limite: int = 10, orden_por: str = "gasto") -> dict:
     supabase = get_supabase()
     if criterio == "today":
-        return _actionable_today(supabase, limite)
+        return _actionable_today(supabase, limite, orden_por)
     elif criterio == "all_segments":
-        return _actionable_all_segments(supabase, limite)
+        return _actionable_all_segments(supabase, limite, orden_por)
+    elif criterio in SEGMENTO_INFO:
+        # Nombre de segmento exacto — filtra solo ese segmento con orden_por respetado
+        return _actionable_single_segment(supabase, criterio, limite, orden_por)
     else:
-        return _actionable_by_filter(supabase, criterio, limite)
+        return _actionable_by_filter(supabase, criterio, limite, orden_por)
 
 
-def _query_segmento_priorizado(supabase, segmento: str, limite: int) -> list:
+def _query_segmento_priorizado(supabase, segmento: str, limite: int, orden_por: str = "gasto") -> list:
     """
-    Trae top N clientes con ORDER BY inteligente directo en Supabase:
-    - Recuperar: gasto_reciente DESC, fecha_ultima_compra ASC (más días = primero)
-    - Desarrollar: gasto_reciente DESC, fecha_ultima_compra DESC (más reciente = primero)
+    Trae top N clientes con ORDER BY configurable:
+    - orden_por="gasto" (default): gasto_reciente DESC + urgencia natural del segmento
+    - orden_por="recencia": fecha_ultima_compra DESC (compra más reciente primero)
     """
-    seg_info = SEGMENTO_INFO.get(segmento, {})
-    tipo_orden = seg_info.get("orden", "desarrollar")
-
     query = (
         supabase.table('segmentacion_clientes_raw')
         .select(COLS_BASE)
         .eq('segmento_rfm', segmento)
-        .order('gasto_reciente', desc=True)
     )
 
-    if tipo_orden == "recuperar":
-        query = query.order('fecha_ultima_compra', desc=False)
-    else:
+    if orden_por == "recencia":
         query = query.order('fecha_ultima_compra', desc=True)
+    else:
+        seg_info = SEGMENTO_INFO.get(segmento, {})
+        tipo_orden = seg_info.get("orden", "desarrollar")
+        query = query.order('gasto_reciente', desc=True)
+        if tipo_orden == "recuperar":
+            query = query.order('fecha_ultima_compra', desc=False)
+        else:
+            query = query.order('fecha_ultima_compra', desc=True)
 
     response = query.limit(limite).execute()
 
@@ -269,13 +354,38 @@ def _query_segmento_priorizado(supabase, segmento: str, limite: int) -> list:
     return clientes
 
 
-def _actionable_today(supabase, limite: int) -> dict:
+def _actionable_single_segment(supabase, segmento: str, limite: int, orden_por: str) -> dict:
+    """
+    Devuelve clientes de un único segmento con orden_por respetado.
+    Usa _query_segmento_priorizado (ORDER BY server-side), por lo que
+    orden_por="recencia" trae los más recientes sin importar su gasto.
+    """
+    info = SEGMENTO_INFO[segmento]
+    clientes = _query_segmento_priorizado(supabase, segmento, limite, orden_por)
+    grupos = [{
+        "segmento": segmento,
+        "prioridad": info["prioridad"],
+        "accion": info["accion"],
+        "clientes": clientes,
+    }]
+    tabla = _formatear_tabla_agrupada(grupos)
+    return {
+        "criterio": segmento,
+        "fecha_consulta": date.today().isoformat(),
+        "total_encontrados": len(clientes),
+        "grupos": grupos,
+        "clientes": clientes,
+        "tabla_formateada": tabla,
+    }
+
+
+def _actionable_today(supabase, limite: int, orden_por: str = "gasto") -> dict:
     grupos = []
     clientes_total = []
 
     for segmento in SEGMENTOS_LLAMAR_HOY:
         info = SEGMENTO_INFO[segmento]
-        clientes_seg = _query_segmento_priorizado(supabase, segmento, limite)
+        clientes_seg = _query_segmento_priorizado(supabase, segmento, limite, orden_por)
         if not clientes_seg:
             continue
         grupos.append({
@@ -286,7 +396,7 @@ def _actionable_today(supabase, limite: int) -> dict:
         })
         clientes_total.extend(clientes_seg)
 
-    tabla = _formatear_tabla_agrupada(grupos, limite)
+    tabla = _formatear_tabla_agrupada(grupos)
     return {
         "criterio": "today",
         "fecha_consulta": date.today().isoformat(),
@@ -297,13 +407,13 @@ def _actionable_today(supabase, limite: int) -> dict:
     }
 
 
-def _actionable_all_segments(supabase, limite: int) -> dict:
+def _actionable_all_segments(supabase, limite: int, orden_por: str = "gasto") -> dict:
     grupos = []
     clientes_total = []
 
     for seg_info in SEGMENTOS_PRIORIDAD:
         segmento = seg_info["segmento"]
-        clientes_seg = _query_segmento_priorizado(supabase, segmento, limite)
+        clientes_seg = _query_segmento_priorizado(supabase, segmento, limite, orden_por)
         grupos.append({
             "segmento": segmento,
             "prioridad": seg_info["prioridad"],
@@ -312,7 +422,7 @@ def _actionable_all_segments(supabase, limite: int) -> dict:
         })
         clientes_total.extend(clientes_seg)
 
-    tabla = _formatear_tabla_agrupada(grupos, limite)
+    tabla = _formatear_tabla_agrupada(grupos)
     return {
         "criterio": "all_segments",
         "fecha_consulta": date.today().isoformat(),
@@ -323,7 +433,7 @@ def _actionable_all_segments(supabase, limite: int) -> dict:
     }
 
 
-def _actionable_by_filter(supabase, criterio: str, limite: int) -> dict:
+def _actionable_by_filter(supabase, criterio: str, limite: int, orden_por: str = "gasto") -> dict:
     if criterio == "churn_risk":
         segmentos_filtro = ['Champion', 'Champions casi recurrente']
     elif criterio == "growth_potential":
@@ -341,6 +451,11 @@ def _actionable_by_filter(supabase, criterio: str, limite: int) -> dict:
 
     if criterio == "top_historical":
         response = query.order('gasto_total', desc=True).limit(limite * 5).execute()
+    elif orden_por == "recencia":
+        if segmentos_filtro:
+            query = query.in_('segmento_rfm', segmentos_filtro)
+        query = query.order('fecha_ultima_compra', desc=True)
+        response = query.limit(limite * 2).execute()
     else:
         if segmentos_filtro:
             query = query.in_('segmento_rfm', segmentos_filtro)
@@ -363,6 +478,8 @@ def _actionable_by_filter(supabase, criterio: str, limite: int) -> dict:
 
     if criterio == "top_historical":
         clientes.sort(key=lambda x: -x['gasto_historico'])
+    elif orden_por == "recencia":
+        clientes.sort(key=lambda x: x['dias_recencia'])  # ASC: menos días = compra más reciente
     else:
         clientes.sort(key=lambda x: -x['gasto_reciente'])
     clientes = clientes[:limite]
@@ -394,7 +511,7 @@ def _actionable_by_filter(supabase, criterio: str, limite: int) -> dict:
         "top_historical": f"Top {len(clientes)} clientes por gasto histórico",
     }
     titulo = titulo_map.get(criterio, criterio)
-    tabla = _formatear_tabla_agrupada(grupos, limite, titulo_override=titulo)
+    tabla = _formatear_tabla_agrupada(grupos, titulo_override=titulo)
 
     return {
         "criterio": criterio,
@@ -406,7 +523,7 @@ def _actionable_by_filter(supabase, criterio: str, limite: int) -> dict:
     }
 
 
-def _formatear_tabla_agrupada(grupos: list, limite: int, titulo_override: str = None) -> str:
+def _formatear_tabla_agrupada(grupos: list, titulo_override: str = None) -> str:
     hoy = date.today().isoformat()
     titulo = titulo_override or f"Clientes a contactar ({hoy})"
     lines = [f"**{titulo}**\n"]
@@ -446,10 +563,12 @@ def get_customer_detail(cliente_id: str) -> dict:
     )
 
     if not response.data:
+        # Espacios flexibles: "TORREGROSA VALERO" matchea "TORREGROSA  VALERO"
+        pattern = '%'.join(cliente_id.split())
         response = (
             supabase.table('segmentacion_clientes_raw')
             .select(COLS_BASE)
-            .ilike('cliente_id', f'%{cliente_id}%')
+            .ilike('cliente_id', f'%{pattern}%')
             .limit(5)
             .execute()
         )
@@ -525,10 +644,12 @@ def _resolver_cliente_id(supabase, cliente_id: str) -> tuple[str | None, dict | 
     Resuelve un nombre de cliente (exacto o parcial) contra segmentacion_clientes_raw.
     Retorna (cliente_id_real, None) si resuelve, o (None, error_dict) si falla.
     """
+    # Espacios flexibles: "TORREGROSA VALERO" matchea "TORREGROSA  VALERO"
+    pattern = '%'.join(cliente_id.split())
     response = (
         supabase.table('segmentacion_clientes_raw')
         .select('cliente_id')
-        .ilike('cliente_id', f'%{cliente_id}%')
+        .ilike('cliente_id', f'%{pattern}%')
         .limit(5)
         .execute()
     )
@@ -553,36 +674,22 @@ def get_customer_products(cliente_id: str, limite: int = 20) -> dict:
     print(f"[Tool: get_customer_products({cliente_id!r}, limite={limite})]")
     supabase = get_supabase()
 
-    COLS = 'cliente_id, familia, ventas_netas, codigo_producto, descripcion, margen_prom, descuento_prom'
-
-    # Exact match
-    response = (
-        supabase.table('lineas_cliente_producto')
-        .select(COLS)
-        .eq('cliente_id', cliente_id)
-        .execute()
-    )
+    # Exact match — paginado para clientes con >1,000 líneas
+    lineas = _fetch_all_lines(supabase, cliente_id)
 
     # Fuzzy fallback via segmentacion_clientes_raw (1 fila por cliente)
-    if not response.data:
+    if not lineas:
         cliente_id_real, error = _resolver_cliente_id(supabase, cliente_id)
         if error:
             return error
         cliente_id = cliente_id_real
-        response = (
-            supabase.table('lineas_cliente_producto')
-            .select(COLS)
-            .eq('cliente_id', cliente_id)
-            .execute()
-        )
-        if not response.data:
+        lineas = _fetch_all_lines(supabase, cliente_id)
+        if not lineas:
             return {
                 "error": f"Cliente '{cliente_id}' existe en segmentación pero no tiene historial de productos.",
                 "cliente_id": cliente_id,
                 "tabla_formateada": f"**{cliente_id}** no tiene líneas de compra registradas.",
             }
-
-    lineas = response.data
     total_ventas = sum(float(l.get('ventas_netas') or 0) for l in lineas)
 
     # Agrupar por familia
@@ -622,7 +729,7 @@ def get_customer_products(cliente_id: str, limite: int = 20) -> dict:
             "familia": v['familia'],
             "ventas_total": round(v['ventas'], 2),
             "porcentaje": round(v['ventas'] / total_ventas * 100, 1) if total_ventas else 0,
-            "margen_prom": round(v['margen_sum'] / v['lineas'], 1) if v['lineas'] else 0,
+            "margen_prom": round(v['margen_sum'] / v['lineas'] * 100, 1) if v['lineas'] else 0,
             "descuento_prom": round(v['descuento_sum'] / v['lineas'], 1) if v['lineas'] else 0,
         }
         for k, v in sorted(productos.items(), key=lambda x: -x[1]['ventas'])[:limite]
@@ -819,11 +926,13 @@ def _aplicar_reglas_negocio(
     segmento: str,
     catalogo_familia: list[dict],
     historial_productos: list[dict],
+    top_familia: list[dict] = None,
 ) -> dict:
     """
     Aplica la estrategia comercial según segmento y devuelve productos priorizados.
-    - catalogo_familia: productos del catálogo activo en la familia del cliente
-    - historial_productos: top productos que ya ha comprado el cliente
+    Patrón A (historial propio): Champions dormido, Rico perdido, Champion,
+                                  Champions casi recurrente, Rico potencial
+    Patrón B (top de familia): Oportunista con potencial, Activo Básico, Oportunista nuevo
     """
     estrategia_info = _ESTRATEGIA_SEGMENTO.get(segmento)
     nota = _NOTAS_SEGMENTO.get(segmento, "")
@@ -837,40 +946,48 @@ def _aplicar_reglas_negocio(
             "llamada_individual": False,
         }
 
-    estrategia_nombre, criterio_orden = estrategia_info
+    estrategia_nombre, _ = estrategia_info
 
-    # Productos ya comprados por el cliente (para cross-sell y upsell)
-    codigos_ya_comprados = {p['codigo_producto'] for p in historial_productos}
+    # PATRÓN A: Historial propio → top 5 → mejor margen + producto con descuento
+    if segmento in ("Champions dormido", "Rico perdido",
+                    "Champion", "Champions casi recurrente", "Rico potencial"):
+        top5 = historial_productos[:5]
+        if not top5:
+            productos_rec = catalogo_familia[:2]
+        else:
+            mejor = sorted(top5, key=lambda x: -x.get('margen_prom', 0))[0]
+            productos_rec = [mejor]
+            con_dcto = [
+                p for p in top5
+                if p.get('descuento_prom', 0) > 0
+                and p.get('codigo_producto') != mejor.get('codigo_producto')
+            ]
+            if con_dcto:
+                mejor_dcto = sorted(con_dcto, key=lambda x: -x.get('margen_prom', 0))[0]
+                productos_rec.append({
+                    **mejor_dcto,
+                    "nota": f"Compró con {mejor_dcto['descuento_prom']:.0f}% dcto — ofrecer con descuento",
+                })
 
-    if segmento in ("Champions dormido", "Rico perdido"):
-        # 2 por margen + hasta 1 con descuento histórico alto (si lo tiene)
-        por_margen = catalogo_familia[:2]
-        con_descuento = [
-            p for p in historial_productos
-            if p.get('descuento_prom', 0) > 10
-        ][:1]
-        productos_rec = por_margen + [
-            {"codigo_producto": p['codigo_producto'], "descripcion": p['descripcion'],
-             "nota": f"Ya compró con {p['descuento_prom']:.0f}% dcto — considerar repetir condición"}
-            for p in con_descuento
-        ]
-
-    elif segmento in ("Oportunista con potencial",):
-        # Priorizar productos de familias NO compradas antes (cross-sell)
-        nuevos = [p for p in catalogo_familia if p['codigo_producto'] not in codigos_ya_comprados]
-        productos_rec = (nuevos or catalogo_familia)[:3]
-
-    elif segmento == "Activo Básico":
-        # Versiones más caras dentro de lo que ya compra
-        productos_rec = sorted(catalogo_familia, key=lambda x: -x.get('precio_con_iva', 0))[:3]
-
-    elif segmento in ("Oportunista nuevo",):
-        # Best-sellers de su familia (los de mayor margen del catálogo) + nota de cross-sell
-        productos_rec = catalogo_familia[:3]
+    # PATRÓN B: Top productos de la familia → más vendido + más descuento
+    elif segmento in ("Oportunista con potencial", "Activo Básico", "Oportunista nuevo"):
+        fuente = top_familia or catalogo_familia
+        if not fuente:
+            productos_rec = []
+        else:
+            productos_rec = [fuente[0]]
+            con_dcto = [p for p in fuente[1:] if p.get('descuento_prom', 0) > 0]
+            if con_dcto:
+                mejor_dcto = sorted(con_dcto, key=lambda x: -x.get('descuento_prom', 0))[0]
+                productos_rec.append({
+                    **mejor_dcto,
+                    "nota": f"Dcto medio {mejor_dcto['descuento_prom']:.0f}% — producto con descuento habitual",
+                })
+            elif len(fuente) >= 2:
+                productos_rec.append(fuente[1])
 
     else:
-        # Resto: top por el criterio del segmento (margen o precio)
-        productos_rec = catalogo_familia[:3]
+        productos_rec = catalogo_familia[:2]
 
     return {
         "estrategia": estrategia_nombre,
@@ -924,8 +1041,14 @@ def get_recommendation(cliente_id: str) -> dict:
     catalogo_result = get_product_catalog(familia=familia_catalogo, orden_por="margen", limite=5)
     catalogo_productos = catalogo_result.get("productos", []) if "error" not in catalogo_result else []
 
+    # Paso 3b: top productos de la familia por ventas reales (para Patrón B)
+    top_familia = []
+    if familia_dominante and familia_dominante not in ("Mixto", "Sin datos"):
+        supabase = get_supabase()
+        top_familia = _top_productos_familia(supabase, familia_dominante)
+
     # Paso 4: aplicar reglas de negocio
-    recomendacion = _aplicar_reglas_negocio(segmento, catalogo_productos, historial_productos)
+    recomendacion = _aplicar_reglas_negocio(segmento, catalogo_productos, historial_productos, top_familia)
 
     # Construir tabla_formateada para el agente
     seg_info = SEGMENTO_INFO.get(segmento, {})
@@ -945,14 +1068,15 @@ def get_recommendation(cliente_id: str) -> dict:
     prod_rec = recomendacion["productos_recomendados"]
     if prod_rec:
         lines.append("### Productos a ofrecer")
-        lines.append("| Producto | Precio IVA (€) | Margen % | Nota |")
-        lines.append("|:---|---:|---:|:---|")
+        lines.append("| Producto | Ventas (€) | Margen % | Dcto % | Nota |")
+        lines.append("|:---|---:|---:|---:|:---|")
         for p in prod_rec:
             desc = (p.get('descripcion') or p.get('codigo_producto', ''))[:45]
-            precio = p.get('precio_con_iva', 0)
-            margen = p.get('margen_teorico_pct', 0)
+            ventas = p.get('ventas_total', 0) or p.get('precio_con_iva', 0)
+            margen = p.get('margen_prom', 0) or p.get('margen_teorico_pct', 0)
+            dcto = p.get('descuento_prom', 0)
             nota_p = p.get('nota', '')
-            lines.append(f"| {desc} | {precio:,.2f} | {margen:.1f}% | {nota_p} |")
+            lines.append(f"| {desc} | {ventas:,.2f} | {margen:.1f}% | {dcto:.1f}% | {nota_p} |")
     else:
         lines.append("_No hay productos específicos a recomendar._")
 

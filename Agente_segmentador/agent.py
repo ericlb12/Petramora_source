@@ -1,12 +1,11 @@
 """
-Agente Segmentador - Petramora v4.0
+Agente Segmentador - Petramora v6.0
 Google GenAI SDK con FunctionDeclarations explícitas
-- Esquema simplificado (10 columnas)
-- Solo último mes + histórico anual
+- 8 tools: segmentación RFM + historial de productos + catálogo + recomendaciones
+- Function calling manual con loop explícito
+- Soporte criterio por nombre de segmento + orden_por=recencia
 """
 
-import os
-import json
 import time
 import uuid
 from datetime import datetime
@@ -27,6 +26,10 @@ from tools import (
     get_segment_metrics,
     get_actionable_customers,
     get_customer_detail,
+    get_customer_products,
+    get_customer_family,
+    get_product_catalog,
+    get_recommendation,
 )
 
 client = genai.Client(api_key=GOOGLE_API_KEY)
@@ -36,6 +39,10 @@ TOOLS_MAP = {
     "get_segment_metrics": get_segment_metrics,
     "get_actionable_customers": get_actionable_customers,
     "get_customer_detail": get_customer_detail,
+    "get_customer_products": get_customer_products,
+    "get_customer_family": get_customer_family,
+    "get_product_catalog": get_product_catalog,
+    "get_recommendation": get_recommendation,
 }
 
 tool_declarations = types.Tool(
@@ -72,8 +79,8 @@ tool_declarations = types.Tool(
         types.FunctionDeclaration(
             name="get_actionable_customers",
             description=(
-                "HERRAMIENTA PRINCIPAL. Lista de clientes concretos que necesitan atención HOY. "
-                "Prioriza Champions dormido. "
+                "HERRAMIENTA PRINCIPAL. Lista de clientes que necesitan atención, "
+                "agrupados por segmento con prioridad y acción sugerida. "
                 "Usa para: '¿a quién llamo?', '¿a quién contactar?', '¿clientes en riesgo?'"
             ),
             parameters_json_schema={
@@ -82,13 +89,33 @@ tool_declarations = types.Tool(
                     "criterio": {
                         "type": "string",
                         "description": (
-                            "'today' (default), 'churn_risk', 'growth_potential', "
-                            "'inactive_vip', 'new_high_value', 'top_historical'."
+                            "'today' (default): urgentes agrupados por prioridad. "
+                            "'all_segments': todos los segmentos con acción sugerida. "
+                            "'churn_risk', 'growth_potential', 'inactive_vip', "
+                            "'new_high_value', 'top_historical'. "
+                            "O el nombre exacto de un segmento para filtrar solo ese: "
+                            "'Champions dormido', 'Rico perdido', 'Champions casi recurrente', "
+                            "'Rico potencial', 'Oportunista con potencial', 'Oportunista nuevo', "
+                            "'Activo Básico', 'Champion', 'Oportunista perdido'. "
+                            "Usa el nombre del segmento cuando el usuario pida clientes de un segmento específico."
                         )
                     },
                     "limite": {
                         "type": "integer",
-                        "description": "Máximo de clientes (default: 10)"
+                        "description": (
+                            "Máximo de clientes por segmento (default: 10). "
+                            "Usa 1 cuando el usuario pida 'el cliente con...' en singular "
+                            "(ej: 'el Champion dormido más reciente', 'el que más gasta')."
+                        )
+                    },
+                    "orden_por": {
+                        "type": "string",
+                        "description": (
+                            "'gasto' (default): ordena por gasto reciente descendente. "
+                            "'recencia': ordena por compra más reciente primero (menos días sin comprar). "
+                            "Usa 'recencia' cuando el usuario pida 'el más reciente', "
+                            "'el que compró antes', 'menos días sin comprar'."
+                        )
                     }
                 },
                 "required": []
@@ -97,8 +124,95 @@ tool_declarations = types.Tool(
         types.FunctionDeclaration(
             name="get_customer_detail",
             description=(
-                "Detalle de un cliente específico: segmento, gasto por año (2024-2026). "
+                "Detalle de un cliente específico: segmento, gasto por año (2024-2026), "
+                "acción sugerida según su segmento. "
                 "Usa para: '¿Por qué llamar a Beatriz?', 'Dime sobre X', '¿Cuánto gastó X en 2024?'"
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "cliente_id": {
+                        "type": "string",
+                        "description": "Nombre del cliente."
+                    }
+                },
+                "required": ["cliente_id"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="get_customer_products",
+            description=(
+                "Historial de compras de un cliente: distribución por familia y top productos. "
+                "Usa para: '¿qué compra X?', '¿en qué gasta más X?', 'historial de productos de X', "
+                "'¿qué ha pedido X?'"
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "cliente_id": {
+                        "type": "string",
+                        "description": "Nombre del cliente."
+                    },
+                    "limite": {
+                        "type": "integer",
+                        "description": "Máximo de productos en el top (default: 20)."
+                    }
+                },
+                "required": ["cliente_id"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="get_customer_family",
+            description=(
+                "Familia de producto dominante de un cliente (>40% del gasto) o 'Mixto'. "
+                "Usa para: '¿en qué está especializado X?', '¿qué familia compra más X?', "
+                "'¿es cliente de CARNE o de QUESOS?'"
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "cliente_id": {
+                        "type": "string",
+                        "description": "Nombre del cliente."
+                    }
+                },
+                "required": ["cliente_id"]
+            }
+        ),
+        types.FunctionDeclaration(
+            name="get_product_catalog",
+            description=(
+                "Productos disponibles del catálogo (activos, con precio). "
+                "Usa para: '¿qué productos de CARNE hay?', '¿qué tenemos disponible en QUESOS?', "
+                "'¿cuáles son los productos con más margen?'"
+            ),
+            parameters_json_schema={
+                "type": "object",
+                "properties": {
+                    "familia": {
+                        "type": "string",
+                        "description": "Familia de producto a filtrar (ej: 'CARNE', 'QUESOS'). Sin especificar = todas."
+                    },
+                    "orden_por": {
+                        "type": "string",
+                        "description": "'margen' (default, margen_teorico_pct DESC) o 'precio' (precio_con_iva DESC)."
+                    },
+                    "limite": {
+                        "type": "integer",
+                        "description": "Número de productos a devolver (default: 10)."
+                    }
+                },
+                "required": []
+            }
+        ),
+        types.FunctionDeclaration(
+            name="get_recommendation",
+            description=(
+                "HERRAMIENTA PRINCIPAL PARA PREPARAR LLAMADAS. "
+                "Recomendación comercial completa: estrategia según segmento RFM, "
+                "productos a ofrecer y contexto para el guion de llamada. "
+                "Usa para: '¿qué le ofrezco a X?', '¿cómo preparo la llamada a X?', "
+                "'recomiéndame productos para X', '¿qué estrategia uso con X?'"
             ),
             parameters_json_schema={
                 "type": "object",
@@ -300,7 +414,7 @@ def chat(user_message, session_id=None, history=None):
 
 def main():
     print("=" * 50)
-    print("AGENTE SEGMENTADOR - PETRAMORA v4.0")
+    print("AGENTE SEGMENTADOR - PETRAMORA v6.0")
     print("=" * 50)
     print("Escribe 'salir' para terminar")
     print("Escribe 'nueva' para nueva sesión\n")

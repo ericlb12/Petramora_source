@@ -1,6 +1,6 @@
 """
-DEMO para presentación — Agente Segmentador Petramora v5.0
-10 preguntas conversacionales que muestran todas las capacidades.
+DEMO para presentación — Agente Segmentador Petramora v6.0
+14 preguntas conversacionales que muestran todas las capacidades.
 Sesión compartida para flujo natural de conversación.
 
 Ejecutar: python tests/test_demo.py
@@ -49,16 +49,28 @@ def main():
 
         # 10. Clientes nuevos con potencial
         "¿Tenemos clientes nuevos que valga la pena fidelizar?",
+
+        # 11. Preparar llamada completa (get_recommendation)
+        "Prepara la llamada al primero de la lista urgente de hoy. ¿Qué le ofrezco?",
+
+        # 12. Historial de productos de ese cliente (get_customer_products)
+        "¿Qué compra ese cliente habitualmente? Dame su historial de productos.",
+
+        # 13. Familia dominante (get_customer_family)
+        "¿En qué familia está especializado ese cliente?",
+
+        # 14. Catálogo de productos disponibles (get_product_catalog)
+        "¿Qué productos de CARNE tenemos disponibles en catálogo?",
     ]
 
     print("\n" + "=" * 70)
-    print("  🎯 DEMO — AGENTE SEGMENTADOR PETRAMORA v5.0")
+    print("  🎯 DEMO — AGENTE SEGMENTADOR PETRAMORA v6.0")
     print("  Análisis inteligente de 24,000+ clientes")
     print("=" * 70)
 
     for i, pregunta in enumerate(preguntas, 1):
         print(f"\n\n{'━' * 70}")
-        print(f"  📌 Pregunta {i}/10")
+        print(f"  📌 Pregunta {i}/{len(preguntas)}")
         print(f"{'━' * 70}")
         print(f"\n  👤 {pregunta}\n")
 
@@ -84,6 +96,10 @@ def main():
   ✓ Identificación de clientes en riesgo de fuga
   ✓ Resumen de todos los segmentos con acciones sugeridas
   ✓ Identificación de clientes nuevos con potencial
+  ✓ Recomendación comercial completa + guion de llamada (v6.0)
+  ✓ Historial de productos por cliente (v6.0)
+  ✓ Familia dominante de un cliente (v6.0)
+  ✓ Catálogo de productos disponibles por familia (v6.0)
 """)
 
 

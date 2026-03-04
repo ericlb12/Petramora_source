@@ -14,9 +14,8 @@ from tools import (
     get_segment_distribution,
     get_segment_evolution,
     get_segment_metrics,
-    save_to_memory
 )
-from agent import chat, load_memory
+from agent import chat
 
 # Colores para output
 class Colors:
@@ -258,42 +257,6 @@ def test_tool_metrics():
         print_info(f"Gasto global jun 2025: {result['gasto_total_global']:,.2f}€")
 
 
-def test_tool_memory():
-    """Prueba tool save_to_memory"""
-    print_header("6. TOOL: save_to_memory")
-    
-    # Guardar preferencia
-    start = time.time()
-    result = save_to_memory("preferencias", "TEST: Usuario prefiere ver datos en porcentajes")
-    elapsed = int((time.time() - start) * 1000)
-    
-    success = result.get('success', False)
-    print_test("Guardar preferencia", success, time_ms=elapsed)
-    
-    # Guardar insight
-    start = time.time()
-    result = save_to_memory("insights", "TEST: Champions son 8% de clientes pero 45% del gasto")
-    elapsed = int((time.time() - start) * 1000)
-    
-    success = result.get('success', False)
-    print_test("Guardar insight", success, time_ms=elapsed)
-    
-    # Categoría inválida
-    start = time.time()
-    result = save_to_memory("categoria_falsa", "Contenido de prueba")
-    elapsed = int((time.time() - start) * 1000)
-    
-    has_error = 'error' in result
-    print_test("Categoría inválida retorna error", has_error, time_ms=elapsed)
-    
-    # Verificar que se guardó en archivo
-    memory_content = load_memory()
-    has_test_content = "TEST:" in memory_content
-    print_test("Contenido guardado en MEMORY.md", has_test_content)
-    
-    if has_test_content:
-        print_info(f"Tamaño del archivo: {len(memory_content)} caracteres")
-
 
 # =============================================================================
 # PRUEBAS DEL AGENTE COMPLETO
@@ -333,25 +296,6 @@ def test_agent_basic():
         if not found:
             print_warning(f"Respuesta: {response[:100]}...")
 
-
-def test_agent_memory_integration():
-    """Prueba integración de memoria del agente"""
-    print_header("8. AGENTE: Integración de memoria")
-    
-    # Pedir que recuerde algo con trigger claro
-    start = time.time()
-    response = chat("Recuerda que me interesa especialmente el segmento 'En riesgo' para futuras conversaciones")
-    elapsed = int((time.time() - start) * 1000)
-    
-    # Verificar que guardó en memoria
-    memory_content = load_memory()
-    saved = "riesgo" in memory_content.lower() or "En riesgo" in memory_content
-    
-    print_test("Agente guarda en memoria cuando se le pide", saved, time_ms=elapsed)
-    
-    if not saved:
-        print_warning("El agente no usó save_to_memory automáticamente")
-        print_info("Comportamiento no determinista del modelo — puede variar entre ejecuciones")
 
 
 def test_agent_edge_cases():
@@ -512,7 +456,6 @@ def print_summary():
   • Obtener métricas de gasto, recencia y frecuencia por segmento
   • Filtrar por grupo o segmento específico
   • Filtrar por fecha de corte (ene 2024 - feb 2026)
-  • Guardar y recordar preferencias/insights en memoria local
   • Persistir conversaciones en Supabase
   • Loguear todas las interacciones para análisis
   • Fallback automático entre modelos de Google
@@ -526,14 +469,12 @@ def print_summary():
 
 {Colors.WARN}⚠ LIMITACIONES TÉCNICAS:{Colors.END}
   • gasto_total es acumulado anual (no mensual) — comparaciones requieren delta
-  • La memoria local (MEMORY.md) no tiene búsqueda semántica
   • El contexto del modelo tiene límite de tokens
 
 {Colors.INFO}ℹ PENDIENTES (HITO 3):{Colors.END}
   • Comparación automática con mes anterior
   • Filtrar evolución por grupo
   • Métricas adicionales (mediana, ticket promedio)
-  • Tool memory_search para buscar en historial
 """)
 
 
@@ -553,9 +494,7 @@ def main():
     test_tool_distribution()
     test_tool_evolution()
     test_tool_metrics()
-    test_tool_memory()
     test_agent_basic()
-    test_agent_memory_integration()
     test_agent_edge_cases()
     test_performance()
     test_logging()

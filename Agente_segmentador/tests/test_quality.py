@@ -47,12 +47,12 @@ def main():
     
     test_query(
         "¿Cuántos Champions tenemos?",
-        "Debería usar get_segment_distribution y dar número + porcentaje"
+        "Debería dar: Champion (64), Champions casi recurrente (995), Champions dormido (448). Total grupo: 1,507"
     )
     
     test_query(
         "¿Cuántos clientes están en riesgo de perderse?",
-        "Debería identificar segmentos: En riesgo, A punto de dormir, Hibernando"
+        "Debería hablar de: Rico perdido (2,357), Champions dormido (448), Oportunista perdido (14,674)"
     )
     
     # ── BLOQUE 2: Distribución ──
@@ -62,12 +62,12 @@ def main():
     
     test_query(
         "Dame un resumen general de cómo están nuestros clientes",
-        "Debería dar visión general por grupos, no solo listar números"
+        "Debería dar visión general por grupos con números, no solo listar"
     )
     
     test_query(
         "¿Cuál es el grupo más grande de clientes?",
-        "Debería ser Otros u Oportunistas según los datos"
+        "Oportunistas: 79.8% (19,257 clientes)"
     )
     
     # ── BLOQUE 3: Métricas de gasto ──
@@ -77,17 +77,17 @@ def main():
     
     test_query(
         "¿Cuánto gastan en promedio nuestros mejores clientes?",
-        "Debería hablar de Champions, gasto promedio ~2,006€"
+        "Champions gasto promedio ~2,006€"
     )
     
     test_query(
         "¿Qué porcentaje del ingreso generan los Champions?",
-        "Debería responder ~42.8%"
+        "~42.8%"
     )
     
     test_query(
         "¿Cuánto facturamos en total este mes?",
-        "Feb 2026 = ~299,989€. Debería aclarar que es acumulado del año"
+        "Feb 2026 = ~299,989€. DEBE ACLARAR que es gasto acumulado en el año, no solo del mes"
     )
     
     # ── BLOQUE 4: Evolución temporal ──
@@ -97,12 +97,12 @@ def main():
     
     test_query(
         "¿Cómo han evolucionado los Champions en los últimos 6 meses?",
-        "Debería mostrar tendencia con números por mes"
+        "Tendencia con números por mes. Caída dic→ene por reseteo anual"
     )
     
     test_query(
         "¿Estamos ganando o perdiendo clientes?",
-        "Debería notar el crecimiento de 2,422 a 24,131 en 26 meses"
+        "Crecimiento general: base crece. Pero Oportunista perdido también crece"
     )
     
     # ── BLOQUE 5: Preguntas de negocio ──
@@ -112,12 +112,12 @@ def main():
     
     test_query(
         "¿Qué segmentos deberíamos priorizar para una campaña de retención?",
-        "Debería recomendar En riesgo, No puedo perderlo, A punto de dormir"
+        "Rico perdido (2,357), Champions dormido (448)"
     )
     
     test_query(
         "¿Tenemos muchos clientes que solo han comprado una vez?",
-        "Debería hablar de Oportunista nuevo y clientes de 1 COMPRA"
+        "Oportunista nuevo (3,967) + Oportunista perdido (14,674)"
     )
     
     # ── BLOQUE 6: Fuera de alcance ──
