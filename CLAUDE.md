@@ -70,7 +70,7 @@ Prioridades de mayor a menor urgencia:
 | Tabla | Filas aprox. | Uso |
 |-------|-------------|-----|
 | `segmentacion_clientes_raw` | 24,363 | Snapshot mensual RFM, 1 fila/cliente |
-| `lineas_cliente_producto` | ~691K | Historial de compras por linea de factura |
+| `lineas_cliente_producto` | ~674K | Historial de compras por linea de factura |
 | `catalogo_productos` | ~7,100 | Productos activos (bloqueado=False, precio>0) |
 
 ## Limitacion critica: PostgREST max_rows=1,000
@@ -94,6 +94,8 @@ Gemini normaliza a un solo espacio al enviar nombres via function calling.
 - Input: `Segmento_RFM_raw.csv` (Power BI export, `;`-separated, formato numerico europeo `1.234,56`)
 - Transforma: mapeo de columnas, conversion de formatos, filtro ultimo mes, deduplicacion por `cliente_id`
 - Output: Upsert batch (500 registros/batch) a Supabase
+- Delete: intento rápido DELETE, fallback TRUNCATE via RPC `truncate_lineas()` para tablas grandes
+- Función RPC `truncate_lineas()` creada en Supabase (TRUNCATE TABLE lineas_cliente_producto)
 
 ## Tests
 
@@ -174,4 +176,49 @@ Dos patrones de seleccion de productos:
 - `get_recommendation` orquesta otras tools internamente en Python (no via LLM). El LLM redacta el guion de llamada.
 - `orden_por="recencia"` en `get_actionable_customers` ordena por `fecha_ultima_compra DESC` (compra mas reciente primero).
 - `_ESTRATEGIA_SEGMENTO["Oportunista perdido"] = None` → `llamada_individual=False`, sin recomendacion de llamada.
-- Dos tipos de margen: `margen_prom` (real historico de `lineas_cliente_producto`) vs `margen_teorico_pct` (precio lista de `catalogo_productos`).
+- Dos tipos de margen: `margen_prom` (proporcion 0-1 en `lineas_cliente_producto`, multiplicar ×100 al agregar) vs `margen_teorico_pct` (ya en % en `catalogo_productos`).
+- `descuento_prom` ya viene en % en `lineas_cliente_producto`. Al agregar, promediar solo lineas con descuento > 0 (no diluir con ceros).
+
+## Patron A de recomendacion (v6.2)
+
+Para segmentos de valor (Champions dormido, Rico perdido, Champion, Champions casi recurrente, Rico potencial):
+1. **Producto mas comprado** (mayor ventas del top 5 historial)
+2. **Mayor margen** (si es distinto al #1)
+3. **Con descuento** (si existe, distinto a #1 y #2)
+4. **Completar con catalogo** si hay menos de 3 productos
+
+Cada producto lleva nota explicativa: "Producto mas comprado", "Mayor margen", "Compro con X% dcto", "Recomendado del catalogo".
+
+## Pendientes — Despliegue FastAPI + Frontend
+
+1. [ ] Crear `api.py` — Backend FastAPI con endpoints `/api/chat`, `/api/chat/new`, `/api/health`
+2. [ ] Actualizar `requirements.txt` — Añadir fastapi y uvicorn
+3. [ ] Crear `Dockerfile` + `.dockerignore` para Cloud Run
+4. [ ] Crear frontend React + Vite (chat UI completo)
+5. [ ] Probar flujo completo local (uvicorn + vite dev)
+
+Detalle del plan en `plan.md`.
+
+## Datos sucios — Estado actual
+
+### ✅ RESUELTO: `lineas_cliente_producto.margen_prom` — overflow ±10^16
+
+**Causa raíz:** Fórmula DAX `% Margen de ventas col = DIVIDE(Margen, Ventas netas)` explotaba cuando ventas netas ≈ 0 (residuo de punto flotante por descuento 100%). DIVIDE no protege cuando el denominador es ≈0 pero no exactamente 0.
+
+**Fix aplicado (2 partes):**
+1. **DAX en Power BI** — `Lineas_Cliente_Producto_Export` ahora filtra `% DESCUENTO < 100` (excluye regalos/muestras) y la fórmula `% Margen de ventas col` usa `IF(ABS(Ventas netas) < 0.01, 0, DIVIDE(...))` para ventas < 1 céntimo
+2. **ETL** — `load_to_supabase` ahora usa fallback `TRUNCATE` via RPC (`truncate_lineas()`) cuando el DELETE da timeout en tablas grandes
+
+**Residual:** "Bocadillo de jamón Ibérico" en Cliente genérico TPV tiene margen -156% (venta a pérdida real, no overflow). Solo afecta a TPV que no es un cliente real.
+
+### ✅ RESUELTO: `catalogo_productos.margen_teorico_pct` > 100%
+
+**Causa raíz:** 3 productos con `coste_unitario` negativo en el ERP → margen >100% (Mini Panettone 504%, Lenguado 133%, Toro Joaquina 106%).
+
+**Fix aplicado:** DAX en `Catalogo_Productos_Export` — añadido `&& Productos[COSTE UNITARIO] >= 0` en la condición del `IF` de `MargenTeoricoPct`. Productos con coste negativo ahora tienen margen = 0%.
+
+## Pendientes — test_demo.py
+
+1. [ ] Cambiar "Cliente genérico TPV" por un Champion real (TPV tarda 117s, no es cliente real)
+2. [ ] Cambiar "ARREAINVEST S.L" por otro Rico perdido (Gemini le añade punto "S.L." y falla búsqueda)
+3. [ ] Validar que la deteccion de error en el test sea mas estricta (ARREAINVEST marco OK cuando fallo)

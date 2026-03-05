@@ -199,13 +199,19 @@ def load_to_supabase(df, table_name, conflict_cols, batch_size=500, delete_first
 
     if delete_first:
         print(f"\n[Load] Borrando datos existentes de '{table_name}'...")
+        first_col = list(df.columns)[0]
         try:
-            supabase.table(table_name).delete().neq(
-                list(df.columns)[0], ''
-            ).execute()
+            # Intento rápido: borrar todo de una vez
+            supabase.table(table_name).delete().neq(first_col, '').execute()
             print(f"   ✅ Tabla limpiada")
-        except Exception as e:
-            print(f"   ⚠️  Error al borrar: {str(e)[:100]}")
+        except Exception:
+            # Fallback: TRUNCATE via RPC (tablas grandes que dan timeout en DELETE)
+            print(f"   ⏳ Tabla grande, usando TRUNCATE via RPC...")
+            try:
+                supabase.rpc('truncate_lineas').execute()
+                print(f"   ✅ Tabla limpiada (TRUNCATE)")
+            except Exception as e2:
+                print(f"   ⚠️  Error en TRUNCATE RPC: {str(e2)[:100]}")
 
     print(f"[Load] Subiendo {total:,} registros a '{table_name}'...")
 

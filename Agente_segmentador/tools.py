@@ -198,22 +198,26 @@ def _top_productos_familia(supabase, familia: str, limite: int = 10) -> list:
                 'margen_sum': 0.0,
                 'descuento_sum': 0.0,
                 'lineas': 0,
+                'lineas_con_dcto': 0,
             }
         productos[key]['ventas_total'] += v
         productos[key]['margen_sum'] += m
-        productos[key]['descuento_sum'] += d
+        if d > 0:
+            productos[key]['descuento_sum'] += d
+            productos[key]['lineas_con_dcto'] += 1
         productos[key]['lineas'] += 1
 
     result = []
     for p in sorted(productos.values(), key=lambda x: -x['ventas_total'])[:limite]:
         n = p['lineas']
+        nd = p['lineas_con_dcto']
         result.append({
             'codigo_producto': p['codigo_producto'],
             'descripcion': p['descripcion'],
             'familia': p['familia'],
             'ventas_total': round(p['ventas_total'], 2),
             'margen_prom': round(p['margen_sum'] / n * 100, 1) if n else 0,
-            'descuento_prom': round(p['descuento_sum'] / n, 1) if n else 0,
+            'descuento_prom': round(p['descuento_sum'] / nd, 1) if nd else 0,
         })
 
     return result
@@ -716,10 +720,12 @@ def get_customer_products(cliente_id: str, limite: int = 20) -> dict:
         d = float(l.get('descuento_prom') or 0)
         fam = l.get('familia') or 'Sin Clasificar'
         if key not in productos:
-            productos[key] = {'ventas': 0.0, 'margen_sum': 0.0, 'descuento_sum': 0.0, 'lineas': 0, 'familia': fam}
+            productos[key] = {'ventas': 0.0, 'margen_sum': 0.0, 'descuento_sum': 0.0, 'lineas': 0, 'lineas_con_dcto': 0, 'familia': fam}
         productos[key]['ventas'] += v
         productos[key]['margen_sum'] += m
-        productos[key]['descuento_sum'] += d
+        if d > 0:
+            productos[key]['descuento_sum'] += d
+            productos[key]['lineas_con_dcto'] += 1
         productos[key]['lineas'] += 1
 
     top_productos = [
@@ -730,7 +736,7 @@ def get_customer_products(cliente_id: str, limite: int = 20) -> dict:
             "ventas_total": round(v['ventas'], 2),
             "porcentaje": round(v['ventas'] / total_ventas * 100, 1) if total_ventas else 0,
             "margen_prom": round(v['margen_sum'] / v['lineas'] * 100, 1) if v['lineas'] else 0,
-            "descuento_prom": round(v['descuento_sum'] / v['lineas'], 1) if v['lineas'] else 0,
+            "descuento_prom": round(v['descuento_sum'] / v['lineas_con_dcto'], 1) if v['lineas_con_dcto'] else 0,
         }
         for k, v in sorted(productos.items(), key=lambda x: -x[1]['ventas'])[:limite]
     ]
@@ -948,19 +954,31 @@ def _aplicar_reglas_negocio(
 
     estrategia_nombre, _ = estrategia_info
 
-    # PATRÓN A: Historial propio → top 5 → mejor margen + producto con descuento
+    # PATRÓN A: Historial propio → top 5 → más comprado + mejor margen + con descuento
     if segmento in ("Champions dormido", "Rico perdido",
                     "Champion", "Champions casi recurrente", "Rico potencial"):
         top5 = historial_productos[:5]
         if not top5:
             productos_rec = catalogo_familia[:2]
         else:
-            mejor = sorted(top5, key=lambda x: -x.get('margen_prom', 0))[0]
-            productos_rec = [mejor]
+            codigos_usados = set()
+
+            # 1. Producto más comprado (mayor ventas)
+            mas_comprado = top5[0]  # ya vienen ordenados por ventas desc
+            productos_rec = [{**mas_comprado, "nota": "Producto más comprado"}]
+            codigos_usados.add(mas_comprado.get('codigo_producto'))
+
+            # 2. Mayor margen (si es distinto al más comprado)
+            mejor_margen = sorted(top5, key=lambda x: -x.get('margen_prom', 0))[0]
+            if mejor_margen.get('codigo_producto') not in codigos_usados:
+                productos_rec.append({**mejor_margen, "nota": "Mayor margen"})
+                codigos_usados.add(mejor_margen.get('codigo_producto'))
+
+            # 3. Producto con descuento (si existe y es distinto a los anteriores)
             con_dcto = [
                 p for p in top5
                 if p.get('descuento_prom', 0) > 0
-                and p.get('codigo_producto') != mejor.get('codigo_producto')
+                and p.get('codigo_producto') not in codigos_usados
             ]
             if con_dcto:
                 mejor_dcto = sorted(con_dcto, key=lambda x: -x.get('margen_prom', 0))[0]
@@ -969,13 +987,22 @@ def _aplicar_reglas_negocio(
                     "nota": f"Compró con {mejor_dcto['descuento_prom']:.0f}% dcto — ofrecer con descuento",
                 })
 
+            # 4. Completar con catálogo si hay menos de 3 productos
+            if len(productos_rec) < 3 and catalogo_familia:
+                for p in catalogo_familia:
+                    if p.get('codigo_producto') not in codigos_usados:
+                        productos_rec.append({**p, "nota": "Recomendado del catálogo"})
+                        codigos_usados.add(p.get('codigo_producto'))
+                        if len(productos_rec) >= 3:
+                            break
+
     # PATRÓN B: Top productos de la familia → más vendido + más descuento
     elif segmento in ("Oportunista con potencial", "Activo Básico", "Oportunista nuevo"):
         fuente = top_familia or catalogo_familia
         if not fuente:
             productos_rec = []
         else:
-            productos_rec = [fuente[0]]
+            productos_rec = [{**fuente[0], "nota": "Más vendido de la familia"}]
             con_dcto = [p for p in fuente[1:] if p.get('descuento_prom', 0) > 0]
             if con_dcto:
                 mejor_dcto = sorted(con_dcto, key=lambda x: -x.get('descuento_prom', 0))[0]
@@ -984,10 +1011,10 @@ def _aplicar_reglas_negocio(
                     "nota": f"Dcto medio {mejor_dcto['descuento_prom']:.0f}% — producto con descuento habitual",
                 })
             elif len(fuente) >= 2:
-                productos_rec.append(fuente[1])
+                productos_rec.append({**fuente[1], "nota": "2º más vendido de la familia"})
 
     else:
-        productos_rec = catalogo_familia[:2]
+        productos_rec = [{**p, "nota": "Recomendado del catálogo"} for p in catalogo_familia[:2]]
 
     return {
         "estrategia": estrategia_nombre,

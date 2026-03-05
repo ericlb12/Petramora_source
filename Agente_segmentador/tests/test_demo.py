@@ -1,7 +1,6 @@
 """
-DEMO para presentación — Agente Segmentador Petramora v6.0
-14 preguntas conversacionales que muestran todas las capacidades.
-Sesión compartida para flujo natural de conversación.
+DEMO para presentación — Agente Segmentador Petramora v6.1
+Flujo conversacional: lista de llamadas + recomendación por tipo de segmento.
 
 Ejecutar: python tests/test_demo.py
 """
@@ -15,93 +14,97 @@ import uuid
 from agent import chat
 
 
-def main():
+# Clientes representativos por segmento (top gasto de cada uno)
+CLIENTES_POR_SEGMENTO = {
+    # URGENTE (hoy)
+    "Champions dormido": "Euroambrosías",
+    "Rico perdido": "ARREAINVEST S.L",
+    # IMPORTANTE (semana)
+    "Champions casi recurrente": "ROOFTOP SMOKEHOUSE S.L",
+    "Rico potencial": "VINSELECCION SA",
+    # NORMAL (mes)
+    "Oportunista con potencial": "Cristina San Juan",
+    "Oportunista nuevo": "BIMBA Y LOLA LOGÍSTICA SLU",
+    # BAJA
+    "Activo Básico": "BORGWARNER EMISSIONS SYSTEMS SPAIN S.L.",
+    "Champion": "Cliente genérico TPV",
+    # Sin llamada individual
+    "Oportunista perdido": "Manuel REGUEIRO GOMEZ",
+}
+
+
+def run_demo():
     session_id = str(uuid.uuid4())
     history = []
-
-    preguntas = [
-        # 1. Visión general
-        "¿Cuántos clientes tenemos y cómo se distribuyen?",
-
-        # 2. Acción inmediata — la pregunta estrella
-        "¿A quién debería llamar hoy?",
-
-        # 3. Profundización — por qué llamar a alguien
-        "¿Por qué debería llamar al primero de la lista?",
-
-        # 4. Detalle individual
-        "Dime todo sobre ese cliente",
-
-        # 5. Visión de negocio — métricas por segmento
-        "¿Qué segmento genera más ingresos?",
-
-        # 6. Top clientes
-        "¿Quiénes son nuestros 5 mejores clientes por gasto histórico?",
-
-        # 7. Estrategia de retención
-        "¿Qué segmentos deberíamos priorizar para retención?",
-
-        # 8. Clientes en riesgo
-        "¿Qué clientes están en riesgo de irse?",
-
-        # 9. Todos los segmentos con acciones
-        "Dame un resumen de todos los segmentos con las acciones que debo tomar",
-
-        # 10. Clientes nuevos con potencial
-        "¿Tenemos clientes nuevos que valga la pena fidelizar?",
-
-        # 11. Preparar llamada completa (get_recommendation)
-        "Prepara la llamada al primero de la lista urgente de hoy. ¿Qué le ofrezco?",
-
-        # 12. Historial de productos de ese cliente (get_customer_products)
-        "¿Qué compra ese cliente habitualmente? Dame su historial de productos.",
-
-        # 13. Familia dominante (get_customer_family)
-        "¿En qué familia está especializado ese cliente?",
-
-        # 14. Catálogo de productos disponibles (get_product_catalog)
-        "¿Qué productos de CARNE tenemos disponibles en catálogo?",
-    ]
+    results = []
 
     print("\n" + "=" * 70)
-    print("  🎯 DEMO — AGENTE SEGMENTADOR PETRAMORA v6.0")
-    print("  Análisis inteligente de 24,000+ clientes")
+    print("  DEMO — AGENTE SEGMENTADOR PETRAMORA v6.1")
+    print("  Lista de llamadas + recomendación por segmento")
     print("=" * 70)
 
-    for i, pregunta in enumerate(preguntas, 1):
+    # --- Parte 1: A quién llamar hoy ---
+    pregunta_llamadas = "¿A quién debo llamar hoy?"
+    print(f"\n\n{'━' * 70}")
+    print(f"  Pregunta 1: Lista de llamadas")
+    print(f"{'━' * 70}")
+    print(f"\n  Tu: {pregunta_llamadas}\n")
+
+    start = time.time()
+    response = chat(pregunta_llamadas, session_id, history)
+    elapsed = time.time() - start
+
+    print(f"  Agente: {response}")
+    print(f"\n  ({elapsed:.1f}s)")
+    results.append(("Lista de llamadas", elapsed, "OK" if len(response) > 100 else "CORTA"))
+
+    # --- Parte 2: Recomendación por cada segmento ---
+    for i, (segmento, cliente) in enumerate(CLIENTES_POR_SEGMENTO.items(), 2):
+        # Nueva sesión por cliente para evitar confusión de contexto
+        sess = str(uuid.uuid4())
+        hist = []
+
+        pregunta = f"¿Qué le ofrezco a {cliente}?"
         print(f"\n\n{'━' * 70}")
-        print(f"  📌 Pregunta {i}/{len(preguntas)}")
+        print(f"  Pregunta {i}: {segmento}")
         print(f"{'━' * 70}")
-        print(f"\n  👤 {pregunta}\n")
+        print(f"\n  Tu: {pregunta}\n")
 
         start = time.time()
-        response = chat(pregunta, session_id, history)
+        response = chat(pregunta, sess, hist)
         elapsed = time.time() - start
 
-        print(f"  🤖 {response}")
-        print(f"\n  ⏱ {elapsed:.1f}s")
+        print(f"  Agente: {response}")
+        print(f"\n  ({elapsed:.1f}s)")
 
+        # Validación básica
+        status = "OK"
+        if "error" in response.lower():
+            status = "ERROR"
+        elif segmento == "Oportunista perdido" and "no se genera" not in response.lower() and "campañas" not in response.lower():
+            status = "REVISAR (debería indicar que no se llama individualmente)"
+        elif len(response) < 50:
+            status = "RESPUESTA CORTA"
+        results.append((f"{segmento} ({cliente})", elapsed, status))
+
+    # --- Resumen ---
     print(f"\n\n{'=' * 70}")
-    print("  ✅ DEMO COMPLETADA")
+    print("  RESUMEN DE RESULTADOS")
     print("=" * 70)
-    print("""
-  Capacidades demostradas:
-  ✓ Distribución de clientes por segmento
-  ✓ Lista priorizada de clientes a contactar hoy (agrupada por segmento)
-  ✓ Explicación de por qué contactar a cada cliente
-  ✓ Detalle completo de un cliente con desglose anual
-  ✓ Métricas de ingresos por segmento
-  ✓ Ranking de mejores clientes por gasto histórico
-  ✓ Recomendación estratégica de retención
-  ✓ Identificación de clientes en riesgo de fuga
-  ✓ Resumen de todos los segmentos con acciones sugeridas
-  ✓ Identificación de clientes nuevos con potencial
-  ✓ Recomendación comercial completa + guion de llamada (v6.0)
-  ✓ Historial de productos por cliente (v6.0)
-  ✓ Familia dominante de un cliente (v6.0)
-  ✓ Catálogo de productos disponibles por familia (v6.0)
-""")
+    total_time = sum(r[1] for r in results)
+    print(f"\n  {'Test':<55} {'Tiempo':>8} {'Estado':>10}")
+    print(f"  {'-' * 75}")
+    for name, elapsed, status in results:
+        name_short = name[:54]
+        color = "\033[92m" if status == "OK" else "\033[93m" if status.startswith("REVISAR") else "\033[91m"
+        print(f"  {name_short:<55} {elapsed:>7.1f}s {color}{status}\033[0m")
+    print(f"  {'-' * 75}")
+    print(f"  {'TOTAL':<55} {total_time:>7.1f}s")
+
+    ok_count = sum(1 for _, _, s in results if s == "OK")
+    print(f"\n  {ok_count}/{len(results)} tests OK")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
-    main()
+    run_demo()
