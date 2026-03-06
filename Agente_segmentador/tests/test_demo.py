@@ -7,6 +7,7 @@ Ejecutar: python tests/test_demo.py
 
 import sys
 import os
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
@@ -27,7 +28,7 @@ CLIENTES_POR_SEGMENTO = {
     "Oportunista nuevo": "BIMBA Y LOLA LOGÍSTICA SLU",
     # BAJA
     "Activo Básico": "BORGWARNER EMISSIONS SYSTEMS SPAIN S.L.",
-    "Champion": "Cliente genérico TPV",
+    "Champion": "JESÚS DOMÍNGUEZ",
     # Sin llamada individual
     "Oportunista perdido": "Manuel REGUEIRO GOMEZ",
 }
@@ -79,9 +80,11 @@ def run_demo():
 
         # Validación básica
         status = "OK"
-        if "error" in response.lower():
+        resp_lower = response.lower()
+        frases_error = ["error", "no se encontró", "no encontré", "no he encontrado", "no existe"]
+        if any(frase in resp_lower for frase in frases_error):
             status = "ERROR"
-        elif segmento == "Oportunista perdido" and "no se genera" not in response.lower() and "campañas" not in response.lower():
+        elif segmento == "Oportunista perdido" and "no se genera" not in resp_lower and "campañas" not in resp_lower:
             status = "REVISAR (debería indicar que no se llama individualmente)"
         elif len(response) < 50:
             status = "RESPUESTA CORTA"

@@ -179,15 +179,19 @@ Dos patrones de seleccion de productos:
 - Dos tipos de margen: `margen_prom` (proporcion 0-1 en `lineas_cliente_producto`, multiplicar ×100 al agregar) vs `margen_teorico_pct` (ya en % en `catalogo_productos`).
 - `descuento_prom` ya viene en % en `lineas_cliente_producto`. Al agregar, promediar solo lineas con descuento > 0 (no diluir con ceros).
 
-## Patron A de recomendacion (v6.2)
+## Patron A de recomendacion (v6.3)
 
 Para segmentos de valor (Champions dormido, Rico perdido, Champion, Champions casi recurrente, Rico potencial):
 1. **Producto mas comprado** (mayor ventas del top 5 historial)
 2. **Mayor margen** (si es distinto al #1)
-3. **Con descuento** (si existe, distinto a #1 y #2)
+3. **Mayor dcto de mercado** (solo si cliente tiene historial con dctos; busca en `top_familia` el producto del top 5 con mayor dcto de mercado, distinto a #1 y #2)
 4. **Completar con catalogo** si hay menos de 3 productos
+5. **Reemplazo global de dcto**: para TODOS los productos seleccionados, `descuento_prom` se reemplaza por el valor de mercado (cruzando `codigo_producto` contra `top_familia`)
 
-Cada producto lleva nota explicativa: "Producto mas comprado", "Mayor margen", "Compro con X% dcto", "Recomendado del catalogo".
+Notas explicativas: "Producto mas comprado", "Mayor margen", "Dcto habitual X.X%", "Recomendado del catalogo".
+
+### Familia Mixto en Patron A
+Para clientes con familia dominante "Mixto", `get_recommendation` extrae las familias unicas del top 5 del historial y llama `_top_productos_familia` para cada una, mergeando los resultados. Asi se obtienen dctos de mercado incluso sin familia dominante unica.
 
 ## Pendientes — Despliegue FastAPI + Frontend
 
@@ -217,8 +221,36 @@ Detalle del plan en `plan.md`.
 
 **Fix aplicado:** DAX en `Catalogo_Productos_Export` — añadido `&& Productos[COSTE UNITARIO] >= 0` en la condición del `IF` de `MargenTeoricoPct`. Productos con coste negativo ahora tienen margen = 0%.
 
-## Pendientes — test_demo.py
+### ✅ RESUELTO: "Cliente genérico TPV" contaminando datos
 
-1. [ ] Cambiar "Cliente genérico TPV" por un Champion real (TPV tarda 117s, no es cliente real)
-2. [ ] Cambiar "ARREAINVEST S.L" por otro Rico perdido (Gemini le añade punto "S.L." y falla búsqueda)
-3. [ ] Validar que la deteccion de error en el test sea mas estricta (ARREAINVEST marco OK cuando fallo)
+**Causa raíz:** TPV es un cliente catch-all de punto de venta, no una persona/empresa real. Tenía 2.2M€ de gasto y 344K líneas de compra.
+
+**Fix aplicado:** ETL (`etl_segmentador.py`) — constante `CLIENTES_EXCLUIDOS` filtra en `transform_segmentacion` y `transform_lineas`. El dato sigue en Power BI pero no llega a Supabase.
+
+### ✅ RESUELTO: test_demo.py — clientes problemáticos y validación
+
+- "Cliente genérico TPV" → reemplazado por "JESÚS DOMÍNGUEZ" (Champion real, 195K€ gasto)
+- ARREAINVEST S.L: fix en `_resolver_cliente_id` y `get_customer_detail` — `cliente_id.rstrip('.')` limpia puntos finales que Gemini añade
+- Validación mejorada: detecta "no se encontró", "no encontré", "no he encontrado", "no existe"
+- Prompt v6.0: regla 5 de empatía — nunca decir "no se encontró", pedir confirmación del nombre
+
+### ✅ RESUELTO: `gasto_reciente` siempre 0 en Supabase
+
+**Causa raíz:** La columna `Gasto_Total_r (2025_2026)` existía en el CSV pero nunca se mapeó en el ETL (olvido desde v5).
+
+**Fix aplicado en `etl_segmentador.py`:**
+1. Añadido `'Gasto_Total_r (2025_2026)': 'gasto_reciente'` a `CSV_COLS_SEGMENTACION`
+2. Añadido `'gasto_reciente'` a `SUPABASE_COLS_SEGMENTACION`
+3. Añadido `'gasto_reciente'` a la limpieza numérica
+
+**Verificado:** 12,354 clientes con gasto_reciente > 0 (50.7%), 11,943 con 0 (sin compras 2025-2026). Top: JESÚS DOMÍNGUEZ 96,233€.
+
+### ✅ RESUELTO: Patrón A — descuentos de mercado en recomendaciones
+
+**Fix aplicado en `tools.py` (`_aplicar_reglas_negocio` + `get_recommendation`):**
+1. Lookup `dcto_mercado` desde `top_familia` → reemplaza dcto del cliente por dcto de mercado en todos los productos
+2. Selección #3: mayor dcto de mercado (no del cliente), nota "Dcto habitual X.X%"
+3. Familia "Mixto": `get_recommendation` extrae familias del top 5 historial y llama `_top_productos_familia` por cada una
+4. Redondeo unificado `.1f` en notas de Patrón A y Patrón B (consistente con columna Dcto%)
+
+**Verificado:** 10/10 tests OK. JESÚS DOMÍNGUEZ (Mixto) ahora muestra 3 productos con dctos de mercado reales.

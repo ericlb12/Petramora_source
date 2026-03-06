@@ -559,6 +559,9 @@ def _formatear_tabla_agrupada(grupos: list, titulo_override: str = None) -> str:
 def get_customer_detail(cliente_id: str) -> dict:
     supabase = get_supabase()
 
+    # Limpiar puntos finales que Gemini añade a abreviaturas (S.L. → S.L)
+    cliente_id = cliente_id.rstrip('.')
+
     response = (
         supabase.table('segmentacion_clientes_raw')
         .select(COLS_BASE)
@@ -648,6 +651,8 @@ def _resolver_cliente_id(supabase, cliente_id: str) -> tuple[str | None, dict | 
     Resuelve un nombre de cliente (exacto o parcial) contra segmentacion_clientes_raw.
     Retorna (cliente_id_real, None) si resuelve, o (None, error_dict) si falla.
     """
+    # Limpiar puntos finales que Gemini añade a abreviaturas (S.L. → S.L)
+    cliente_id = cliente_id.rstrip('.')
     # Espacios flexibles: "TORREGROSA VALERO" matchea "TORREGROSA  VALERO"
     pattern = '%'.join(cliente_id.split())
     response = (
@@ -961,6 +966,14 @@ def _aplicar_reglas_negocio(
         if not top5:
             productos_rec = catalogo_familia[:2]
         else:
+            # Lookup de descuentos de mercado desde top_familia
+            dcto_mercado = {}
+            if top_familia:
+                for p in top_familia:
+                    cod = p.get('codigo_producto')
+                    if cod:
+                        dcto_mercado[cod] = p.get('descuento_prom', 0)
+
             codigos_usados = set()
 
             # 1. Producto más comprado (mayor ventas)
@@ -974,18 +987,25 @@ def _aplicar_reglas_negocio(
                 productos_rec.append({**mejor_margen, "nota": "Mayor margen"})
                 codigos_usados.add(mejor_margen.get('codigo_producto'))
 
-            # 3. Producto con descuento (si existe y es distinto a los anteriores)
-            con_dcto = [
-                p for p in top5
-                if p.get('descuento_prom', 0) > 0
-                and p.get('codigo_producto') not in codigos_usados
-            ]
-            if con_dcto:
-                mejor_dcto = sorted(con_dcto, key=lambda x: -x.get('margen_prom', 0))[0]
-                productos_rec.append({
-                    **mejor_dcto,
-                    "nota": f"Compró con {mejor_dcto['descuento_prom']:.0f}% dcto — ofrecer con descuento",
-                })
+            # 3. Producto con mayor dcto de mercado (solo si cliente tiene historial con dctos)
+            cliente_tiene_dcto = any(p.get('descuento_prom', 0) > 0 for p in top5)
+            if cliente_tiene_dcto:
+                candidatos_dcto = [
+                    p for p in top5
+                    if p.get('codigo_producto') not in codigos_usados
+                    and dcto_mercado.get(p.get('codigo_producto'), 0) > 0
+                ]
+                if candidatos_dcto:
+                    mejor_dcto = sorted(
+                        candidatos_dcto,
+                        key=lambda x: -dcto_mercado.get(x.get('codigo_producto'), 0),
+                    )[0]
+                    dcto_val = dcto_mercado[mejor_dcto['codigo_producto']]
+                    productos_rec.append({
+                        **mejor_dcto,
+                        "nota": f"Dcto habitual {dcto_val:.1f}%",
+                    })
+                    codigos_usados.add(mejor_dcto.get('codigo_producto'))
 
             # 4. Completar con catálogo si hay menos de 3 productos
             if len(productos_rec) < 3 and catalogo_familia:
@@ -995,6 +1015,12 @@ def _aplicar_reglas_negocio(
                         codigos_usados.add(p.get('codigo_producto'))
                         if len(productos_rec) >= 3:
                             break
+
+            # Reemplazar descuento_prom por dcto de mercado en TODOS los productos
+            for p in productos_rec:
+                cod = p.get('codigo_producto')
+                if cod and cod in dcto_mercado:
+                    p['descuento_prom'] = dcto_mercado[cod]
 
     # PATRÓN B: Top productos de la familia → más vendido + más descuento
     elif segmento in ("Oportunista con potencial", "Activo Básico", "Oportunista nuevo"):
@@ -1008,7 +1034,7 @@ def _aplicar_reglas_negocio(
                 mejor_dcto = sorted(con_dcto, key=lambda x: -x.get('descuento_prom', 0))[0]
                 productos_rec.append({
                     **mejor_dcto,
-                    "nota": f"Dcto medio {mejor_dcto['descuento_prom']:.0f}% — producto con descuento habitual",
+                    "nota": f"Dcto medio {mejor_dcto['descuento_prom']:.1f}% — producto con descuento habitual",
                 })
             elif len(fuente) >= 2:
                 productos_rec.append({**fuente[1], "nota": "2º más vendido de la familia"})
@@ -1068,11 +1094,19 @@ def get_recommendation(cliente_id: str) -> dict:
     catalogo_result = get_product_catalog(familia=familia_catalogo, orden_por="margen", limite=5)
     catalogo_productos = catalogo_result.get("productos", []) if "error" not in catalogo_result else []
 
-    # Paso 3b: top productos de la familia por ventas reales (para Patrón B)
+    # Paso 3b: top productos de la familia por ventas reales
     top_familia = []
+    supabase = get_supabase()
     if familia_dominante and familia_dominante not in ("Mixto", "Sin datos"):
-        supabase = get_supabase()
         top_familia = _top_productos_familia(supabase, familia_dominante)
+    elif familia_dominante == "Mixto" and historial_productos:
+        # Para Mixto en Patrón A: consultar top_familia de cada familia del historial
+        familias_vistas = set()
+        for p in historial_productos[:5]:
+            fam = p.get('familia')
+            if fam and fam not in familias_vistas:
+                familias_vistas.add(fam)
+                top_familia.extend(_top_productos_familia(supabase, fam))
 
     # Paso 4: aplicar reglas de negocio
     recomendacion = _aplicar_reglas_negocio(segmento, catalogo_productos, historial_productos, top_familia)

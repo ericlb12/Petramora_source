@@ -47,6 +47,14 @@ NORMALIZACION_FAMILIAS = {
 }
 
 # ═════════════════════════════════════════════════════════════
+# CLIENTES EXCLUIDOS
+# Clientes genéricos que no representan personas/empresas reales.
+# Se filtran del ETL para no contaminar segmentación ni recomendaciones.
+# ═════════════════════════════════════════════════════════════
+
+CLIENTES_EXCLUIDOS = {'Cliente genérico TPV'}
+
+# ═════════════════════════════════════════════════════════════
 # CLASIFICACIÓN MANUAL DE PRODUCTOS SIN CATEGORÍA
 # Productos cuyo itemCategoryId está vacío en el ERP.
 # Se aplica después de la transformación, solo a los "Sin Clasificar".
@@ -264,6 +272,7 @@ CSV_COLS_SEGMENTACION = {
     'Facturas_2025_c': 'facturas_2025',
     'Facturas_2026_c': 'facturas_2026',
     'Gasto_Total_c': 'gasto_total',
+    'Gasto_Total_r (2025_2026)': 'gasto_reciente',
 }
 
 SEGMENTO_COL_PATTERN = 'ltimo global'
@@ -273,6 +282,7 @@ SUPABASE_COLS_SEGMENTACION = [
     'ventas_2024', 'ventas_2025', 'ventas_2026',
     'facturas_2024', 'facturas_2025', 'facturas_2026',
     'gasto_total',
+    'gasto_reciente',
 ]
 
 
@@ -316,7 +326,7 @@ def transform_segmentacion(df: pd.DataFrame) -> pd.DataFrame:
     df_clean = df_clean.drop(columns=['fecha_corte_dt'])
 
     # Limpieza numérica
-    for col in ['ventas_2024', 'ventas_2025', 'ventas_2026', 'gasto_total']:
+    for col in ['ventas_2024', 'ventas_2025', 'ventas_2026', 'gasto_total', 'gasto_reciente']:
         df_clean[col] = df_clean[col].apply(convert_european_number)
     for col in ['facturas_2024', 'facturas_2025', 'facturas_2026']:
         df_clean[col] = df_clean[col].apply(convert_european_number).astype(int)
@@ -334,6 +344,13 @@ def transform_segmentacion(df: pd.DataFrame) -> pd.DataFrame:
     df_clean['segmento_rfm'] = df_clean['segmento_rfm'].fillna('Sin Clasificar').str.strip()
     df_clean = df_clean.replace({np.nan: None, np.inf: 0, -np.inf: 0})
     df_clean = df_clean.drop_duplicates(subset=['cliente_id'])
+
+    # ── Excluir clientes genéricos ──
+    antes = len(df_clean)
+    df_clean = df_clean[~df_clean['cliente_id'].isin(CLIENTES_EXCLUIDOS)]
+    excluidos = antes - len(df_clean)
+    if excluidos:
+        print(f"   Excluidos {excluidos:,} clientes genéricos: {CLIENTES_EXCLUIDOS}")
 
     print(f"   Registros finales: {len(df_clean):,}")
     return df_clean
@@ -449,6 +466,13 @@ def transform_lineas(df: pd.DataFrame) -> pd.DataFrame:
     despues = len(df_clean)
     if antes != despues:
         print(f"   Eliminadas {antes - despues:,} filas sin cliente/producto/factura")
+
+    # ── Excluir clientes genéricos ──
+    antes = len(df_clean)
+    df_clean = df_clean[~df_clean['cliente_id'].isin(CLIENTES_EXCLUIDOS)]
+    excluidos = antes - len(df_clean)
+    if excluidos:
+        print(f"   Excluidos {excluidos:,} registros de clientes genéricos: {CLIENTES_EXCLUIDOS}")
 
     # ── Deduplicar por PK ──
     df_clean = df_clean.drop_duplicates(subset=['cliente_id', 'codigo_producto', 'document_no'])
